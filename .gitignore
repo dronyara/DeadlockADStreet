@@ -3,3 +3,4 @@ obj/
 data/
 !showcase/
 *.log
+dist/

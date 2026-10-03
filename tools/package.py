@@ -1,0 +1,87 @@
+"""Builds the release zip: unpack it into the Deadlock folder, on top of Deadworks.
+
+    python tools/package.py <version> ["<Deadlock dir>"]
+
+Needs a Release build first (dotnet build AbilityDraft -c Release) and the signature file
+(python tools/find_sigs.py). Output: dist/AbilityDraft-<version>.zip
+"""
+import os, sys, zipfile
+
+version = sys.argv[1]
+game = sys.argv[2] if len(sys.argv) > 2 else r"C:\Program Files (x86)\Steam\steamapps\common\Deadlock"
+root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+plugins = os.path.join(game, "game", "bin", "win64", "managed", "plugins")
+build = None
+steam_inf = os.path.join(game, "game", "citadel", "steam.inf")
+if os.path.exists(steam_inf):
+    for line in open(steam_inf, encoding="utf-8", errors="replace"):
+        if line.startswith("ServerVersion="):
+            build = line.split("=", 1)[1].strip()
+
+START_BAT = r"""@echo off
+rem Ability Draft server. Players join from the Deadlock console:  connect <your ip>:27067
+rem Forward UDP/TCP 27067 on the router for players outside your network.
+cd /d "%~dp0"
+if not defined DOTNET_ROOT if exist "%LOCALAPPDATA%\Microsoft\dotnet\dotnet.exe" set "DOTNET_ROOT=%LOCALAPPDATA%\Microsoft\dotnet"
+deadworks.exe -dedicated -console -condebug -insecure -allow_no_lobby_connect ^
+  +hostport 27067 +sv_hibernate_when_empty 0 ^
+  +net_limit_sv_message_process_time_ms_drop_burst 60000 +net_limit_sv_message_process_time_ms_drop_rate 60000 ^
+  +map dl_midtown
+pause
+"""
+
+INSTALL = f"""Ability Draft for Deadlock {version}
+=====================================
+
+A server-side Deadworks plugin: players draft four abilities from other heroes on the Street Brawl
+draft screen, then play Standard or Street Brawl. Nothing is installed on the players' game.
+
+Built and tested against Deadlock build {build or "?"} with Deadworks v0.5.3.
+
+INSTALL (the host only)
+1. Deadlock installed from Steam (or a separate copy through SteamCMD, app 1422450).
+2. .NET 10 runtime or SDK:  https://dotnet.microsoft.com/download/dotnet/10.0
+3. The latest Deadworks release, unpacked into the Deadlock folder:
+   https://github.com/Deadworks-net/deadworks/releases
+4. Unpack THIS zip into the same Deadlock folder (it adds files under game\\bin\\win64).
+5. Run game\\bin\\win64\\start-abilitydraft.bat
+
+PLAY
+- Everyone opens the Deadlock console and types:  connect <host ip>:27067   (the host: connect localhost:27067)
+- Pick heroes. The host (first player in) types /draft in chat.
+- Vote for the rules by typing 1 (Standard) or 2 (Street Brawl) in chat.
+- The match starts and the draft screen opens with ability cards. Take a card by typing 1, 2 or 3 in chat
+  (left, top, right). Four picks, the last one is the ultimate; three rerolls per pick with the Reroll button.
+  DO NOT CLICK an ability card with the mouse - the game crashes. Type the number instead.
+- Street Brawl: after the fourth ability the same screen goes on to the usual items.
+  Standard: the map reloads once everyone is done, and every player gets their team, hero and kit back.
+- /newdraft (host) returns everyone to the lobby.
+
+AFTER A GAME PATCH
+- Deadworks stops starting until its next release: update Deadworks.
+- If the server log says "signature not found", the bundled AbilityDraft.signatures.json no longer matches the
+  game. Regenerate it with tools/find_sigs.py from the repository (see PATCHING.md there). Until then the
+  plugin falls back to a text menu instead of the draft screen.
+
+Source, journal and patch notes: https://github.com/dronyara/DeadlockADStreet
+Made with AI assistance (Claude Code + universal-modder). Use on your own servers only.
+"""
+
+files = {
+    "game/bin/win64/managed/plugins/AbilityDraft.dll": os.path.join(plugins, "AbilityDraft.dll"),
+    "game/bin/win64/managed/plugins/AbilityDraft.signatures.json": os.path.join(plugins, "AbilityDraft.signatures.json"),
+}
+for arc, src in files.items():
+    if not os.path.exists(src):
+        raise SystemExit(f"missing {src}")
+
+os.makedirs(os.path.join(root, "dist"), exist_ok=True)
+out = os.path.join(root, "dist", f"AbilityDraft-{version}.zip")
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for arc, src in files.items():
+        z.write(src, arc)
+    z.writestr("game/bin/win64/start-abilitydraft.bat", START_BAT.replace("\n", "\r\n"))
+    z.writestr("AbilityDraft-README.txt", INSTALL.replace("\n", "\r\n"))
+print(out, os.path.getsize(out), "bytes; game build", build)
+for i in zipfile.ZipFile(out).infolist():
+    print("  ", i.filename, i.file_size)
