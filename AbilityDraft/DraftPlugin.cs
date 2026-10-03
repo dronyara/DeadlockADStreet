@@ -68,6 +68,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     public override void OnLoad(bool isReload)
     {
         Log($"=== Ability Draft loaded (reload={isReload}) pool={AbilityPool.All.Length} abilities ===");
+        Log(Native.Load(Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? ".", "managed", "plugins", "AbilityDraft.signatures.json")));
         if (isReload) BeginMap();
     }
 

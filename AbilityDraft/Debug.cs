@@ -24,6 +24,7 @@ public sealed partial class DraftPlugin
     readonly AbilityDef?[] _nativeOffer = new AbilityDef?[Offers];
     readonly uint[] _nativeWritten = new uint[Offers];
     bool _nativePrev1, _nativePrev2, _nativePrev3;
+    bool _nativeMarkDrafted;      // experiment: does a "drafted" card stop being clickable?
 
     static uint Token(string name) => MurmurHash2.HashLowerCase(name, 0x31415926);
 
@@ -47,13 +48,8 @@ public sealed partial class DraftPlugin
             _nativeWritten[i] = Token(pool[i].Name);
             System.Runtime.InteropServices.Marshal.WriteInt32(data, i * 248 + 96, (int)_nativeWritten[i]);
             System.Runtime.InteropServices.Marshal.WriteByte(data, i * 248 + 241, 0);      // m_bRare
+            if (_nativeMarkDrafted) System.Runtime.InteropServices.Marshal.WriteByte(data, i * 248 + 240, 1);   // m_bHasBeenDrafted
         }
-        // The stock header reads "pick N of M" from these two counters.
-        System.Runtime.InteropServices.Marshal.WriteInt32(state, 120, Slots);
-        System.Runtime.InteropServices.Marshal.WriteInt32(state, 116, Slots - _nativeRound);
-        // Raw writes are invisible to the network layer; re-setting the field through the schema accessor flags it as changed.
-        var touch = new SchemaAccessor<long>("CCitadelPlayerPawn"u8, "m_ItemDraftRoundState"u8, 0);
-        touch.Set(pawn.Handle, touch.Get(pawn.Handle));
         Log($"native round {_nativeRound + 1}: offered {string.Join(", ", pool.Select(x => x.Name))} tick={GlobalVars.TickCount}");
     }
 
@@ -74,7 +70,11 @@ public sealed partial class DraftPlugin
         Log($"native round {_nativeRound + 1}: key {pressed + 1} -> {pick.Name} (added={added != null}); kit now [{string.Join(", ", KitOf(pawn))}]");
         _nativeRound++;
         Array.Clear(_nativeOffer);
-        Array.Clear(_nativeWritten);          // next frame deals the next slot's offers
+        // Dealing again is the only thing that makes the client redraw the cards, so every pick ends with a
+        // server-side reroll: the next three abilities, or - after the fourth pick - the player's real item options.
+        pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, pawn.GetCurrency(ECurrencyType.EItemDraftRerolls) + 1);
+        Native.Reroll(pawn);
+        if (_nativeRound >= Slots) Log("native draft finished, stock item draft resumes");
         return true;
     }
 
@@ -210,9 +210,17 @@ public sealed partial class DraftPlugin
                     pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, int.Parse(a[1]));
                     break;
                 }
+            case "nskip":
+                Native.Skip(Players.FromSlot(int.Parse(a[0]))?.GetHeroPawn() ?? throw new Exception("no pawn"));
+                break;
+            case "nreroll":
+                Native.Reroll(Players.FromSlot(int.Parse(a[0]))?.GetHeroPawn() ?? throw new Exception("no pawn"));
+                break;
             case "native":
+                if (!Native.Ready) throw new Exception("native functions not resolved");
                 _nativeSlot = int.Parse(a[0]);
                 _nativeRound = 0;
+                _nativeMarkDrafted = a.Length > 1 && a[1] == "drafted";
                 Array.Clear(_nativeKit); Array.Clear(_nativeOffer); Array.Clear(_nativeWritten);
                 Log($"native draft armed for slot {_nativeSlot}");
                 break;
