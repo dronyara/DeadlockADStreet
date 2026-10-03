@@ -194,7 +194,7 @@ public sealed partial class DraftPlugin
 
     public override void OnGameFrame(bool simulating, bool firstTick, bool lastTick)
     {
-        PatchNativeDraft();
+        TickNativeDraft();
         if (_phase is not (Phase.Drafting or Phase.Voting)) return;
         foreach (var s in _seats.Values) PlaceBillboard(s);
     }

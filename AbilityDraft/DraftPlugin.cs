@@ -174,18 +174,36 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
                 if (!c.IsBot) Chat.PrintToChat(c, "[Draft] Нет героя — ты пропускаешь драфт. | No hero picked, you sit this draft out.");
                 continue;
             }
-            var s = new Seat { Slot = c.Slot, Bot = c.IsBot, NextBotAt = Now + BotThinkSeconds };
-            _seats[c.Slot] = s;
-            DealRound(s);
+            _seats[c.Slot] = new Seat { Slot = c.Slot, Bot = c.IsBot };
         }
         if (_seats.Count == 0) throw new CommandException("Nobody has a hero yet.");
+        _native.Clear();
+        Log($"DRAFT START seats={string.Join(",", _seats.Keys)}");
+        StartVote();
+    }
 
+    /// <summary>The draft as a menu in front of the player, before the match: used for Standard rules,
+    /// which have no stock draft screen, and whenever the native functions could not be found.</summary>
+    void BeginTextDraft()
+    {
+        foreach (var s in _seats.Values)
+        {
+            s.NextBotAt = Now + BotThinkSeconds;
+            DealRound(s);
+        }
         _phase = Phase.Drafting;
         _phaseEnd = Now + DraftSeconds;
         _nextTimerText = 0;
-        Log($"DRAFT START seats={string.Join(",", _seats.Keys)}");
         Announce("ABILITY DRAFT", "Выбери 4 способности · Pick 4 abilities");
         foreach (var s in _seats.Values) ShowOffer(s);
+    }
+
+    void BeginCountdown()
+    {
+        foreach (var s in _seats.Values) HidePanel(s);
+        _phase = Phase.Starting;
+        _phaseEnd = Now + StartDelaySeconds;
+        Announce(RulesName(_rules).ToUpperInvariant(), $"Матч начнётся через {StartDelaySeconds:0} с · Match starts in {StartDelaySeconds:0} s");
     }
 
     void DealRound(Seat s)
@@ -275,7 +293,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
             foreach (var s in _seats.Values.Where(s => s.PanelUp)) UI.Panel(PanelId).Set(RecipientFilter.Single(s.Slot), "ad_timer", $"{left}");
         }
         if (_seats.Count == 0) { CancelDraft("everyone left"); return; }
-        if (_seats.Values.All(s => s.Done)) StartVote();
+        if (_seats.Values.All(s => s.Done)) BeginCountdown();
     }
 
     void CancelDraft(string why)
@@ -360,11 +378,10 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         if (_forcedRules != Rules.None) (_rules, _forcedRules) = (_forcedRules, Rules.None);
         Log($"VOTE RESULT standard={std} brawl={brawl} -> {_rules}");
 
-        foreach (var s in _seats.Values) HidePanel(s);
-        _phase = Phase.Starting;
-        _phaseEnd = Now + StartDelaySeconds;
-        Announce(RulesName(_rules).ToUpperInvariant(), $"Матч начнётся через {StartDelaySeconds:0} с · Match starts in {StartDelaySeconds:0} s");
-        Chat.PrintToChatAll($"[Draft] Правила: {RulesName(_rules)} ({std}:{brawl}). Матч начинается!");
+        Chat.PrintToChatAll($"[Draft] Правила: {RulesName(_rules)} ({std}:{brawl}).");
+        // The draft runs on the stock Street Brawl screen once the match is up; the text menu is the fallback when it cannot.
+        if (Native.Ready) BeginCountdown();
+        else BeginTextDraft();
     }
 
     static string RulesName(Rules r) => r == Rules.StreetBrawl ? "Street Brawl" : "Standard";

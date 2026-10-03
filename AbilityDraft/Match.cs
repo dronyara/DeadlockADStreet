@@ -16,10 +16,14 @@ public sealed partial class DraftPlugin
     {
         _phase = Phase.Match;
         Log($"MATCH START rules={_rules} kits={_kits.Count}");
-        if (_rules == Rules.StreetBrawl)
+        // With the native functions available the draft always happens on the Street Brawl screen;
+        // for Standard rules that phase is only borrowed and the mode is switched back afterwards.
+        bool nativeDraft = Native.Ready && _kits.Count == 0;
+        if (_rules == Rules.StreetBrawl || nativeDraft)
         {
             Server.ExecuteCommand($"{BrawlCvar} 1");
             Server.ExecuteCommand("citadel_street_brawl_reset");
+            if (nativeDraft) ArmNativeDraft(thenStandard: _rules != Rules.StreetBrawl);
         }
         GameRules.ChangeGameState(EGameState.GameInProgress);
         GameRules.SetGameStartTime(Now);

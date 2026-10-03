@@ -15,69 +15,6 @@ public sealed partial class DraftPlugin
         try { File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss} {s}{Environment.NewLine}"); } catch { }
     }
 
-    // ---- research: the stock Street Brawl draft screen showing abilities -----------------------------------------
-    // The server rewrites the item ids of the three native draft options to ability ids as soon as they are rolled.
-    // Clicking such a card crashes the client, so picks come from ability keys 1-3 and are applied here;
-    // itemdraftskip then moves the stock screen on to its next roll, which is patched again.
-    int _nativeSlot = -1, _nativeRound;
-    readonly string?[] _nativeKit = new string?[Slots];
-    readonly AbilityDef?[] _nativeOffer = new AbilityDef?[Offers];
-    readonly uint[] _nativeWritten = new uint[Offers];
-    bool _nativePrev1, _nativePrev2, _nativePrev3;
-    bool _nativeMarkDrafted;      // experiment: does a "drafted" card stop being clickable?
-
-    static uint Token(string name) => MurmurHash2.HashLowerCase(name, 0x31415926);
-
-    void PatchNativeDraft()
-    {
-        if (_nativeSlot < 0 || _nativeRound >= Slots || Players.FromSlot(_nativeSlot)?.GetHeroPawn() is not { } pawn) return;
-        var state = new SchemaAccessor<int>("CCitadelPlayerPawn"u8, "m_ItemDraftRoundState"u8, 0).GetAddress(pawn.Handle);
-        int count = System.Runtime.InteropServices.Marshal.ReadInt32(state, 8);
-        var data = System.Runtime.InteropServices.Marshal.ReadIntPtr(state, 16);
-        if (data == IntPtr.Zero || count < Offers) return;
-        bool fresh = false;
-        for (int i = 0; i < Offers; i++)
-            fresh |= (uint)System.Runtime.InteropServices.Marshal.ReadInt32(data, i * 248 + 96) != _nativeWritten[i] || _nativeWritten[i] == 0;
-        if (!fresh) return;
-
-        bool ult = _nativeRound == Slots - 1;
-        var pool = AbilityPool.All.Where(x => x.Ult == ult && !_nativeKit.Contains(x.Name)).OrderBy(_ => Random.Shared.Next()).Take(Offers).ToArray();
-        for (int i = 0; i < Offers; i++)
-        {
-            _nativeOffer[i] = pool[i];
-            _nativeWritten[i] = Token(pool[i].Name);
-            System.Runtime.InteropServices.Marshal.WriteInt32(data, i * 248 + 96, (int)_nativeWritten[i]);
-            System.Runtime.InteropServices.Marshal.WriteByte(data, i * 248 + 241, 0);      // m_bRare
-            if (_nativeMarkDrafted) System.Runtime.InteropServices.Marshal.WriteByte(data, i * 248 + 240, 1);   // m_bHasBeenDrafted
-        }
-        Log($"native round {_nativeRound + 1}: offered {string.Join(", ", pool.Select(x => x.Name))} tick={GlobalVars.TickCount}");
-    }
-
-    bool NativeInput(AbilityAttemptEvent args)
-    {
-        if (_nativeSlot != args.PlayerSlot || _nativeRound >= Slots) return false;
-        args.BlockAll();
-        bool k1 = args.IsHeld(InputButton.Ability1), k2 = args.IsHeld(InputButton.Ability2), k3 = args.IsHeld(InputButton.Ability3);
-        int pressed = k1 && !_nativePrev1 ? 0 : k2 && !_nativePrev2 ? 1 : k3 && !_nativePrev3 ? 2 : -1;
-        (_nativePrev1, _nativePrev2, _nativePrev3) = (k1, k2, k3);
-        if (pressed < 0 || _nativeOffer[pressed] is not { } pick) return true;
-
-        var pawn = args.Controller?.GetHeroPawn();
-        if (pawn == null) return true;
-        if (pawn.GetAbilityBySlot((EAbilitySlot)_nativeRound) is CCitadelBaseAbility old) pawn.RemoveAbility(old);
-        var added = pawn.AddAbility(pick.Name, (ushort)_nativeRound);
-        _nativeKit[_nativeRound] = pick.Name;
-        Log($"native round {_nativeRound + 1}: key {pressed + 1} -> {pick.Name} (added={added != null}); kit now [{string.Join(", ", KitOf(pawn))}]");
-        _nativeRound++;
-        Array.Clear(_nativeOffer);
-        // Dealing again is the only thing that makes the client redraw the cards, so every pick ends with a
-        // server-side reroll: the next three abilities, or - after the fourth pick - the player's real item options.
-        pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, pawn.GetCurrency(ECurrencyType.EItemDraftRerolls) + 1);
-        Native.Reroll(pawn);
-        if (_nativeRound >= Slots) Log("native draft finished, stock item draft resumes");
-        return true;
-    }
-
     void PollBridge()
     {
         string[] lines;
@@ -116,6 +53,22 @@ public sealed partial class DraftPlugin
             case "state":
                 Log($"STATE phase={_phase} rules={_rules} host={_hostSlot} gamestate={GameRules.GameState} mode={GameRules.GameMode} match={GameRules.MatchMode} " +
                     $"clock={GameRules.GameClock:F0} map={Server.MapName} players={string.Join(",", Players.GetAll().Select(c => $"{c.Slot}:{c.PlayerName}:t{c.TeamNum}:{c.GetHeroPawn()?.HeroID.ToString() ?? "nohero"}"))}");
+                break;
+            case "mode":
+                {
+                    // Raw game-mode fields: GameRules.GameMode from the API reads Invalid on this build.
+                    var gr = GameRules.Pointer;
+                    int Raw(ReadOnlySpan<byte> f) => new SchemaAccessor<int>("CCitadelGameRules"u8, f, 0).Get(gr);
+                    Log($"  MODE m_eGameMode={Raw("m_eGameMode"u8)} state={GameRules.GameState} brawlcvar={ConVar.Find("citadel_gamemode_streetbrawl_enabled")?.GetBool()} " +
+                        $"troopers={Entities.ByDesignerName("npc_trooper").Count()} brawlTroopers={Entities.All.Count(e => e.ModifierProp?.Modifiers.Any(m => m.SubclassVData?.Name == "modifier_street_brawl_trooper") == true)}");
+                    break;
+                }
+            case "gs":
+                GameRules.ChangeGameState(Enum.Parse<EGameState>(a[0], true));
+                break;
+            case "setmode":
+                new SchemaAccessor<int>("CCitadelGameRules"u8, "m_eGameMode"u8, 0).Set(GameRules.Pointer, int.Parse(a[0]));
+                Log($"m_eGameMode := {a[0]}");
                 break;
             case "kits":
                 foreach (var pawn in Players.GetAllPawns())
@@ -199,30 +152,9 @@ public sealed partial class DraftPlugin
                 foreach (var pawn in Players.GetAllPawns())
                     Log($"  slot={pawn.Controller?.Slot} all=[{string.Join(", ", pawn.AbilityComponent.Abilities.Where(x => x.IsItem || x.IsSignature).Select(x => $"{x.AbilityName}@{x.AbilitySlot}"))}]");
                 break;
-            case "cc":
-                Server.ClientCommand(int.Parse(a[0]), string.Join(' ', a.Skip(1)));
-                Log($"sent to client {a[0]}: {string.Join(' ', a.Skip(1))}");
-                break;
-            case "rerolls":
-                {
-                    var pawn = Players.FromSlot(int.Parse(a[0]))?.GetHeroPawn() ?? throw new Exception("no pawn");
-                    Log($"rerolls {pawn.GetCurrency(ECurrencyType.EItemDraftRerolls)} -> {a[1]}");
-                    pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, int.Parse(a[1]));
-                    break;
-                }
-            case "nskip":
-                Native.Skip(Players.FromSlot(int.Parse(a[0]))?.GetHeroPawn() ?? throw new Exception("no pawn"));
-                break;
-            case "nreroll":
-                Native.Reroll(Players.FromSlot(int.Parse(a[0]))?.GetHeroPawn() ?? throw new Exception("no pawn"));
-                break;
             case "native":
-                if (!Native.Ready) throw new Exception("native functions not resolved");
-                _nativeSlot = int.Parse(a[0]);
-                _nativeRound = 0;
-                _nativeMarkDrafted = a.Length > 1 && a[1] == "drafted";
-                Array.Clear(_nativeKit); Array.Clear(_nativeOffer); Array.Clear(_nativeWritten);
-                Log($"native draft armed for slot {_nativeSlot}");
+                foreach (var ns in _native.Values)
+                    Log($"  native slot={ns.Slot} bot={ns.Bot} round={ns.Round} kit=[{string.Join(", ", ns.Kit)}] offer=[{string.Join(", ", ns.Offer.Select(o => o?.Name))}]");
                 break;
             case "unlock":
                 foreach (var pawn in Players.GetAllPawns())
