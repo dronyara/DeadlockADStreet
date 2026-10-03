@@ -48,7 +48,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     int _hostSlot = -1;
     Rules _rules = Rules.None;
     readonly Dictionary<int, Seat> _seats = new();
-    // Finished kits, kept across the map reload a rules change needs and re-applied whenever a hero is rebuilt.
+    // Finished kits, re-applied whenever the engine rebuilds a hero (respawn-time resets, a Street Brawl match reset).
     readonly Dictionary<int, string[]> _kits = new();
     IHandle? _loop;
     float _nextTimerText;
@@ -87,18 +87,10 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         _seats.Clear();
         Server.ExecuteCommand("sv_hibernate_when_empty 0");
         Server.ExecuteCommand("citadel_allow_duplicate_heroes 1");
-        if (_phase == Phase.Starting)
-        {
-            // The map was reloaded to switch rules: the draft is over, this map is the match.
-            _phase = Phase.Match;
-            Log($"match map loaded, rules={_rules}, kits={_kits.Count}");
-        }
-        else
-        {
-            _phase = Phase.Lobby;
-            _kits.Clear();
-            _rules = Rules.None;
-        }
+        Server.ExecuteCommand($"{BrawlCvar} 0");          // every map starts as a Standard lobby; the vote decides
+        _phase = Phase.Lobby;
+        _kits.Clear();
+        _rules = Rules.None;
         _loop = Timer.Every(0.25.Seconds(), Tick);
     }
 
@@ -172,7 +164,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         _kits.Clear();
         foreach (var c in Players.GetAll())
         {
-            if (c.GetHeroPawn() == null)
+            if (c.GetHeroPawn() is not { } pawn || pawn.HeroID == 0)
             {
                 if (!c.IsBot) Chat.PrintToChat(c, "[Draft] Нет героя — ты пропускаешь драфт. | No hero picked, you sit this draft out.");
                 continue;

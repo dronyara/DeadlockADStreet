@@ -70,6 +70,14 @@ public sealed partial class DraftPlugin
                     Log($"slot {a[0]} -> team {a[1]} hero {a[2]}");
                     break;
                 }
+            case "go":
+                _phase = Phase.Match;
+                GameRules.ChangeGameState(EGameState.GameInProgress);
+                break;
+            case "ents":
+                foreach (var g in Entities.All.Where(e => e.DesignerName.Contains(arg, StringComparison.OrdinalIgnoreCase)).GroupBy(e => e.DesignerName))
+                    Log($"  ent {g.Key} x{g.Count()}");
+                break;
             case "draft":
                 StartDraft();
                 break;
