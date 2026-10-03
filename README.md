@@ -1,46 +1,79 @@
-# Ability Draft для Deadlock
+# Ability Draft for Deadlock
 
-Серверный плагин [Deadworks](https://github.com/Deadworks-net/deadworks): драфт способностей в стиле выбора предметов Street Brawl.
-Клиент игры не модифицируется — всё работает на вашем собственном сервере, друзья подключаются через `connect`.
+**English** · [Русский](README.ru.md)
 
-## Как проходит игра
-1. Хост запускает сервер. Игроки заходят (`connect <ip>:27067` в консоли Deadlock) и выбирают героев
-   (обычным способом или `/hero haze`, `/team amber|sapphire`).
-2. Хост (первый зашедший игрок) пишет в чат **`/draft`** (или `dw_draft` в консоли).
-3. Голосование за правила: напиши в чат **1** — Standard или **2** — Street Brawl (25 с; ничья — голос хоста, иначе Standard).
-4. Матч стартует, и у всех открывается **родной экран драфта Street Brawl с карточками способностей**:
-   4 выбора (последний — ульты), на каждый выбор 3 «прокрутки» штатной кнопкой.
-   **Карточку берут цифрой в чате: Enter → 1, 2 или 3 → Enter (левая, верхняя, правая). Сообщение в чат не попадает.
-   Кликать по карточке способности мышью нельзя — игра вылетит.**
-5. Street Brawl: после четвёртой способности тот же экран показывает обычные предметы, дальше всё как в Street Brawl.
-   Standard: как только все набрали способности (или через 50 с — остальное добирается случайно), карта перезагружается
-   в обычный режим, и плагин сам возвращает каждому команду, героя и набранные способности. Ничего выбирать заново не нужно.
-6. `/newdraft` (хост) — вернуться в лобби и сыграть заново.
+A server-side [Deadworks](https://github.com/Deadworks-net/deadworks) plugin. Every player drafts four abilities
+from other heroes on the Street Brawl draft screen, then the lobby plays Standard or Street Brawl with those kits.
 
-На клиент ничего ставить не нужно. Если родной экран недоступен (после патча не нашлись функции игры, см. PATCHING.md),
-драфт идёт запасным способом — текстовым меню перед прицелом до старта матча: 1-3 взять, R+1-3 заменить карточку.
-У игроков с лаунчером Deadworks запасной вариант показывается панелью с кнопками. `/lang en` — английские названия.
+The game client is not modified. Everything runs on a server you host; players join with `connect` and install nothing.
 
-## Установка (хост)
-1. Deadlock из Steam, [.NET 10 SDK](https://dotnet.microsoft.com/download), свежий релиз Deadworks, распакованный в папку Deadlock.
-2. Собрать плагин — он сам скопируется в `game/bin/win64/managed/plugins`:
-   ```
-   dotnet build AbilityDraft -c Release
-   ```
-   Если Steam стоит не в `C:\Program Files (x86)\Steam`, добавьте `-p:DeadlockDir="<путь к Deadlock>"`.
-3. Запуск: `tools\host.ps1` (интернет, нужен проброс UDP/TCP 27067) или `tools\host.ps1 -Lan`.
-4. Сам хост заходит так же: консоль Deadlock (`` ` ``) → `connect localhost:27067`.
+![The stock draft screen showing ability cards](showcase/native-draft-1-of-4.png)
 
-Серверу и игре на одной машине нужно много памяти: на 8 ГБ всё работает, но загрузка карты занимает около минуты.
+## How a game goes
+1. The host starts the server. Players open the Deadlock console and type `connect <ip>:27067`, then pick heroes
+   (the usual way, or `/hero haze` and `/team amber|sapphire` in chat).
+2. The host (the first player who joined) types **`/draft`** in chat (or `dw_draft` in the console).
+3. Rules vote: type **1** for Standard or **2** for Street Brawl in chat. 25 seconds; a tie goes to the host's vote,
+   otherwise to Standard.
+4. The match starts and the **stock Street Brawl draft screen opens with ability cards**. Four picks, the last one
+   is the ultimate, with three rerolls per pick on the stock Reroll button.
+   **Take a card by typing its number in chat: Enter → `1`, `2` or `3` → Enter (left, top, right). The message is not
+   shown to anyone. Do not click an ability card with the mouse — the game crashes.**
+5. Street Brawl: after the fourth ability the same screen goes on to the usual items, and the match continues as
+   Street Brawl.
+   Standard: once everyone has four abilities (or after 50 seconds — the rest is filled in at random) the map reloads
+   into a normal match, and the plugin puts every player back on their team and hero with their drafted kit.
+6. `/newdraft` (host) returns everyone to the lobby.
 
-После патча игры Deadworks перестаёт запускаться, пока не выйдет его обновление, — это нормально, обновите Deadworks.
-После патча с новыми героями пересоберите пул: `tools\dump-vdata.ps1 -Vrf <vrf.dll>`.
+If the stock screen is unavailable — after a game patch the plugin may fail to find the game functions it needs, see
+[PATCHING.md](PATCHING.md) — the draft falls back to a text menu in front of the crosshair before the match starts:
+`1`-`3` picks a card, `R` + `1`-`3` replaces it. `/lang en` switches ability names to English (Russian is the default).
 
-## Что внутри
-- `AbilityDraft/` — плагин (C#): `DraftPlugin.cs` (фазы, драфт, голосование), `Ui.cs` (панель и чат),
-  `Match.cs` (старт матча, переключение режима), `Lobby.cs`, `Debug.cs` (лог и тестовый мост),
-  `AbilityPool.g.cs` (имена способностей, сгенерировано из вашей установки игры).
-- `tools/` — запуск сервера, генерация пула и сигнатур, сборка релиза, чтение дампов (`mdmp.py`). `PATCHING.md` — что чинить после патча игры.
+## Install (host only)
+Windows only: Deadworks has no Linux build because Valve ships no Linux server for Deadlock.
 
-Файлов игры в репозитории нет. Мод сделан с помощью ИИ (Claude Code + universal-modder).
-Используйте только на своих серверах; на официальные серверы Valve это никак не влияет.
+1. Deadlock from Steam (or a separate copy through SteamCMD, app `1422450`).
+2. [.NET 10](https://dotnet.microsoft.com/download/dotnet/10.0).
+3. The latest [Deadworks release](https://github.com/Deadworks-net/deadworks/releases), unpacked into the Deadlock folder.
+4. The zip from this repository's [Releases](../../releases), unpacked into the same Deadlock folder.
+5. Run `game\bin\win64\start-abilitydraft.bat`.
+
+Forward UDP/TCP 27067 on the router for players outside your network. The host joins the same way:
+console (`` ` ``) → `connect localhost:27067`.
+
+Running the server and the game on one machine takes a lot of memory. It works on 8 GB, but a map load takes about a
+minute, and so does the reload into Standard.
+
+### Building from source
+```
+dotnet build AbilityDraft -c Release
+pip install capstone
+python tools\find_sigs.py
+```
+The build copies the plugin into `game/bin/win64/managed/plugins`; `find_sigs.py` writes the signature file next to
+it. If Steam is not in `C:\Program Files (x86)\Steam`, add `-p:DeadlockDir="<Deadlock folder>"` to the build and pass
+the folder to the script. Start the server with `tools\host.ps1` (or `tools\host.ps1 -Lan`).
+
+## After a game patch
+Deadworks stops starting until its next release, and the plugin's own signatures may need regenerating.
+[PATCHING.md](PATCHING.md) lists what to check, in order.
+
+## Known limits
+- **Clicking an ability card crashes the client.** The stock screen treats every card as an item; an ability has
+  no item data, and the client reads past it. Picks go through chat instead.
+- **The header still says "item draft".** That text is in the client's localization and cannot be changed by a server.
+- **The TAB upgrade menu shows the hero's original abilities.** Upgrading the drafted ones works; the menu takes its
+  layout from the hero's data on the client.
+- **Standard gives 50 seconds for all four picks**, because the draft borrows Street Brawl's first buy phase.
+- Tested with one player and bots. A full lobby and a complete match have not been tested, and only a handful of the
+  152 abilities have been cast on a foreign hero.
+
+## What is inside
+- `AbilityDraft/` — the plugin (C#): `DraftPlugin.cs` (phases, vote, the text-menu draft), `NativeDraft.cs` (the
+  draft on the stock screen, the switch to Standard), `Native.cs` (game functions found by signature), `Match.cs`,
+  `Lobby.cs`, `Ui.cs`, `Debug.cs` (log and a file-driven test bridge), `AbilityPool.g.cs` (ability names, generated).
+- `tools/` — server start scripts, the ability pool generator, the signature finder, release packaging, a crash dump reader.
+- `showcase/` — a clip and screenshots.
+
+There are no game files in this repository. The mod was built with AI assistance (Claude Code + universal-modder).
+Use it on your own servers only; it does nothing to Valve's official servers.
