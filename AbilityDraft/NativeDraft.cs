@@ -104,29 +104,70 @@ public sealed partial class DraftPlugin
             _kits[ns.Slot] = ns.Kit.Select(k => k!).ToArray();
             Log($"native slot {ns.Slot} timed out, kit completed at random: [{string.Join(", ", ns.Kit)}]");
         }
+        // Street Brawl strips the side lanes of their Walkers and Barracks for good, so a true Standard match needs
+        // a fresh map. Everyone keeps their seat: team, hero and drafted kit are put back once the map is up again.
+        _restore.Clear();
+        foreach (var c in Players.GetAll())
+        {
+            if (c.IsBot || c.GetHeroPawn() is not { } pawn || !_kits.TryGetValue(c.Slot, out var kit)) continue;
+            _restore[c.PlayerSteamId] = new Restore(c.TeamNum, pawn.HeroID, kit);
+        }
         _native.Clear();
         _nativeThenStandard = false;
-        Log($"SWITCH TO STANDARD kits={_kits.Count}");
-        foreach (var pawn in Players.GetAllPawns()) CloseDraft(pawn);
-
-        // The mode follows this convar live; cycling the game state restarts the match under it.
-        // (citadel_street_brawl_reset must NOT be used here: it starts a brawl round whatever the convar says.)
+        Log($"SWITCH TO STANDARD: reloading {Server.MapName}, restoring {_restore.Count} players");
+        if (_restore.Count == 0)
+        {
+            // Nobody to carry over (a bots-only test): there is no match to rebuild.
+            _phase = Phase.Lobby;
+            Server.ChangeLevel(Server.MapName);
+            return;
+        }
+        Announce("STANDARD", "Карта перезагружается, набор сохранён · Reloading the map, your kit is kept");
         Server.ExecuteCommand($"{BrawlCvar} 0");
         Server.ExecuteCommand($"{ActiveLaneCvar} 0");
-        GameRules.ChangeGameState(EGameState.PreGameWait);
+        _phase = Phase.Restoring;
+        Server.ChangeLevel(Server.MapName);
+    }
+
+    // ---- restoring seats after the reload into Standard --------------------------------------------------------
+    sealed record Restore(int Team, Heroes Hero, string[] Kit)
+    {
+        public float NextFixAt;
+    }
+
+    const float RestoreSeconds = 150f;      // slow machines need about a minute just to load the map
+    readonly Dictionary<ulong, Restore> _restore = new();
+    float _restoreDeadline;
+
+    /// <summary>Puts every returning player back on their team and hero with their kit, then starts the match.</summary>
+    void TickRestore()
+    {
+        bool allBack = true;
+        foreach (var (steamId, r) in _restore)
+        {
+            var c = Players.GetAll().FirstOrDefault(p => !p.IsBot && p.PlayerSteamId == steamId);
+            if (c == null) { allBack = false; continue; }
+            var pawn = c.GetHeroPawn();
+            bool ok = c.TeamNum == r.Team && pawn != null && pawn.HeroID == r.Hero && KitOf(pawn).SequenceEqual(r.Kit);
+            if (ok) continue;
+            allBack = false;
+            if (Now < r.NextFixAt) continue;
+            r.NextFixAt = Now + 3f;                         // hero changes take a moment to land; do not spam them
+            _kits[c.Slot] = r.Kit;                          // re-applied by OnPawnHeroInitialized when the hero is rebuilt
+            if (c.TeamNum != r.Team) c.ChangeTeam(r.Team);
+            if (pawn == null || pawn.HeroID != r.Hero) c.SelectHero(r.Hero);
+            else ApplyKit(pawn, r.Kit);
+            Log($"restore {c.PlayerName}: team {c.TeamNum}->{r.Team} hero {pawn?.HeroID.ToString() ?? "none"}->{r.Hero}");
+        }
+        if (!allBack && Now < _restoreDeadline) return;
+
+        Log($"RESTORE done (all back={allBack}), starting Standard match");
+        _restore.Clear();
+        _phase = Phase.Match;
         GameRules.ChangeGameState(EGameState.GameInProgress);
         GameRules.SetGameStartTime(Now);
         Announce("STANDARD", "Матч начался · The match has started");
-        Timer.Once(1.Seconds(), () =>
-        {
-            foreach (var pawn in Players.GetAllPawns())
-            {
-                // Items drafted while waiting for the others belong to the borrowed brawl phase, not to this match.
-                foreach (var item in pawn.AbilityComponent.Abilities.Where(a => a.IsItem).Select(a => a.AbilityName).ToList())
-                    pawn.RemoveItem(item);
-            }
-            ApplyAllKits();
-        });
+        Timer.Once(1.Seconds(), ApplyAllKits);
     }
 
     /// <summary>The engine has just dealt this hero three items: turn them into three abilities for the current slot.</summary>

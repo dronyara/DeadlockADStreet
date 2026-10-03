@@ -22,7 +22,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     const float StartDelaySeconds = 5f;
     const float BotThinkSeconds = 1.5f;
 
-    enum Phase { Lobby, Drafting, Voting, Starting, Match }
+    enum Phase { Lobby, Drafting, Voting, Starting, Match, Restoring }
     enum Rules { None, Standard, StreetBrawl }
 
     sealed class Seat
@@ -95,9 +95,20 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         Server.ExecuteCommand("citadel_allow_duplicate_heroes 1");
         Server.ExecuteCommand($"{BrawlCvar} 0");          // every map starts as a Standard lobby; the vote decides
         Server.ExecuteCommand($"{ActiveLaneCvar} 0");
-        _phase = Phase.Lobby;
-        _kits.Clear();
-        _rules = Rules.None;
+        if (_phase == Phase.Restoring && _restore.Count > 0)
+        {
+            // The reload into Standard after a draft on the Street Brawl screen: hold the lobby until everyone is back.
+            _restoreDeadline = Now + RestoreSeconds;
+            _kits.Clear();
+            Log($"map reloaded for Standard, waiting for {_restore.Count} players");
+        }
+        else
+        {
+            _phase = Phase.Lobby;
+            _kits.Clear();
+            _restore.Clear();
+            _rules = Rules.None;
+        }
         _loop = Timer.Every(0.25.Seconds(), Tick);
     }
 
@@ -152,6 +163,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
             case Phase.Drafting: TickDraft(); break;
             case Phase.Voting: TickVote(); break;
             case Phase.Starting: if (Now >= _phaseEnd) StartMatch(); break;
+            case Phase.Restoring: TickRestore(); break;
         }
     }
 
