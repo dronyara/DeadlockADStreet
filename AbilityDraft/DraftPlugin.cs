@@ -37,6 +37,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         public readonly HashSet<string> Seen = new();       // offered this round, so a reroll never repeats
         public Rules Vote;
         public float NextBotAt;
+        public CPointWorldText? Billboard;
         public bool Prev1, Prev2, Prev3;
         public bool PanelUp;
         public bool Done => Round >= Slots;
@@ -55,22 +56,26 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
 
     static float Now => GlobalVars.CurTime;
 
+    /// <summary>The host is the first human on the server; after a plugin hot reload it is found again here.</summary>
+    int Host()
+    {
+        if (_hostSlot < 0 || Players.FromSlot(_hostSlot) is not { IsBot: false })
+            _hostSlot = Players.GetAll().Where(p => !p.IsBot).Select(p => p.Slot).DefaultIfEmpty(-1).Min();
+        return _hostSlot;
+    }
+
     // ---- lifecycle ------------------------------------------------------------------------------------------
     public override void OnLoad(bool isReload)
     {
         Log($"=== Ability Draft loaded (reload={isReload}) pool={AbilityPool.All.Length} abilities ===");
-        var panel = UI.Panel(PanelId);
-        panel.On("pick", e => OnUiOffer(e, reroll: false));
-        panel.On("reroll", e => OnUiOffer(e, reroll: true));
-        panel.On("vote", e => { if (e.Caller != null) CastVote(e.Caller.Slot, e.ArgAt(0) == "brawl" ? Rules.StreetBrawl : Rules.Standard); });
-        UI.ClientResync += OnClientResync;
         if (isReload) BeginMap();
     }
 
     public override void OnUnload()
     {
         _loop?.Cancel();
-        UI.ClientResync -= OnClientResync;
+        foreach (var s in _seats.Values) HidePanel(s);
+        if (_panelWired) UI.ClientResync -= OnClientResync;
     }
 
     public override void OnPrecacheResources()
@@ -111,9 +116,8 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         if (c == null) return;
         Log($"player connected slot={args.Slot} name={c.PlayerName} bot={c.IsBot} mapchange={args.IsMapChangeReconnect}");
         if (c.IsBot) return;
-        if (_hostSlot < 0 || Players.FromSlot(_hostSlot) == null) _hostSlot = args.Slot;
         if (_phase == Phase.Lobby)
-            Chat.PrintToChat(c, args.Slot == _hostSlot
+            Chat.PrintToChat(c, args.Slot == Host()
                 ? "[Draft] Ты хост. Когда все выберут героев, напиши /draft. | You are the host: type /draft when everyone has a hero."
                 : "[Draft] Выбери героя и жди, пока хост начнёт драфт. | Pick a hero and wait for the host to start the draft.");
     }
@@ -121,7 +125,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     public override void OnClientDisconnect(ClientDisconnectedEvent args)
     {
         if (args.IsMapChange) return;
-        _seats.Remove(args.Slot);
+        if (_seats.Remove(args.Slot, out var gone)) ClearBillboard(gone);
         _kits.Remove(args.Slot);
         if (args.Slot == _hostSlot)
         {
@@ -153,7 +157,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     [Command("draft", Description = "Host: start the ability draft for everyone on the server")]
     public void CmdDraft(CCitadelPlayerController? caller = null)
     {
-        if (caller != null && caller.Slot != _hostSlot) throw new CommandException("Only the host can start the draft.");
+        if (caller != null && caller.Slot != Host()) throw new CommandException("Only the host can start the draft.");
         if (_phase != Phase.Lobby) throw new CommandException($"Draft is already running ({_phase}).");
         StartDraft();
     }
@@ -252,7 +256,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     {
         foreach (var s in _seats.Values.Where(s => !s.Done).ToList())
         {
-            if (Players.FromSlot(s.Slot) == null) { _seats.Remove(s.Slot); continue; }
+            if (Players.FromSlot(s.Slot) == null) { ClearBillboard(s); _seats.Remove(s.Slot); continue; }
             if ((s.Bot || Now >= _phaseEnd) && Now >= s.NextBotAt)
             {
                 // Bots, and humans who ran out of time, take a random offer.
@@ -284,7 +288,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     [Command("draftcancel", Description = "Host: cancel the running draft and go back to the lobby")]
     public void CmdCancel(CCitadelPlayerController? caller = null)
     {
-        if (caller != null && caller.Slot != _hostSlot) throw new CommandException("Only the host can cancel the draft.");
+        if (caller != null && caller.Slot != Host()) throw new CommandException("Only the host can cancel the draft.");
         if (_phase is not (Phase.Drafting or Phase.Voting)) throw new CommandException("No draft is running.");
         CancelDraft("host");
         Chat.PrintToChatAll("[Draft] Драфт отменён. | Draft cancelled.");
@@ -351,7 +355,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         // A tie goes to the host's vote, and to Standard when the host did not vote.
         _rules = brawl > std ? Rules.StreetBrawl
             : std > brawl ? Rules.Standard
-            : _seats.TryGetValue(_hostSlot, out var h) && h.Vote != Rules.None ? h.Vote : Rules.Standard;
+            : _seats.TryGetValue(Host(), out var h) && h.Vote != Rules.None ? h.Vote : Rules.Standard;
         if (_forcedRules != Rules.None) (_rules, _forcedRules) = (_forcedRules, Rules.None);
         Log($"VOTE RESULT standard={std} brawl={brawl} -> {_rules}");
 

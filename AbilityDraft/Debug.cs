@@ -95,6 +95,10 @@ public sealed partial class DraftPlugin
                 _forcedRules = a[0].StartsWith('b') ? Rules.StreetBrawl : Rules.Standard;
                 Log($"forced rules = {_forcedRules}");
                 break;
+            case "angles":
+                foreach (var pawn in Players.GetAllPawns())
+                    Log($"  slot={pawn.Controller?.Slot} view={pawn.ViewAngles} eye={pawn.EyeAngles} cam={pawn.CameraAngles} eyepos={pawn.EyePosition}");
+                break;
             case "unlock":
                 foreach (var pawn in Players.GetAllPawns())
                     foreach (var ab in pawn.AbilityComponent.Abilities.Where(ab => ab.IsSignature))

@@ -9,6 +9,10 @@ if (-not $env:DOTNET_ROOT) { $env:DOTNET_ROOT = "$env:LOCALAPPDATA\Microsoft\dot
 $wd = "$Deadlock\game\bin\win64"
 Remove-Item "$Deadlock\game\citadel\console.log" -ErrorAction SilentlyContinue
 $argList = @('-dedicated', '-console', '-condebug', '-insecure', '-allow_no_lobby_connect',
-    '+sv_lan', '1', '+hostport', '27067', '+sv_hibernate_when_empty', '0', '+map', $Map) + $Extra
+    '+sv_lan', '1', '+hostport', '27067', '+sv_hibernate_when_empty', '0',
+    # A host that also runs the game on a small machine stalls now and then; the stock per-client CPU budget
+    # (200 ms burst) then drops the player with NETWORK_DISCONNECT_OVERFLOW. Friends-only server, so be generous.
+    '+net_limit_sv_message_process_time_ms_drop_burst', '60000', '+net_limit_sv_message_process_time_ms_drop_rate', '60000',
+    '+map', $Map) + $Extra
 $p = Start-Process -FilePath "$wd\deadworks.exe" -WorkingDirectory $wd -ArgumentList $argList -PassThru
 "PID=$($p.Id)"

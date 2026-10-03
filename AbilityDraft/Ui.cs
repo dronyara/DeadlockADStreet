@@ -8,6 +8,9 @@ namespace AbilityDraft;
 public sealed partial class DraftPlugin
 {
     const string PanelId = "abilitydraft";
+    const float BillboardDistance = 260f;    // in front of the hero's eyes, clear of the third-person camera
+    const float BillboardRaise = 70f;        // lifted so the hero does not stand in the middle of the text
+    const float BillboardScale = 0.2f;
 
     static readonly (string, string)[] CardStyle =
     [
@@ -26,7 +29,23 @@ public sealed partial class DraftPlugin
         ("font-size", "22px"), ("color", "#ffffff"), ("horizontal-align", "center"), ("vertical-align", "center"),
     ];
 
-    static bool HasUi(Seat s) => !s.Bot && UI.HasClientBootstrap(s.Slot);
+    bool _panelWired;
+
+    // The panel channel is only touched once a launcher client is actually present.
+    bool HasUi(Seat s)
+    {
+        if (s.Bot || !UI.HasClientBootstrap(s.Slot)) return false;
+        if (!_panelWired)
+        {
+            _panelWired = true;
+            var panel = UI.Panel(PanelId);
+            panel.On("pick", e => OnUiOffer(e, reroll: false));
+            panel.On("reroll", e => OnUiOffer(e, reroll: true));
+            panel.On("vote", e => { if (e.Caller != null) CastVote(e.Caller.Slot, e.ArgAt(0) == "brawl" ? Rules.StreetBrawl : Rules.Standard); });
+            UI.ClientResync += OnClientResync;
+        }
+        return true;
+    }
 
     void ShowOffer(Seat s)
     {
@@ -34,13 +53,19 @@ public sealed partial class DraftPlugin
         var c = Players.FromSlot(s.Slot);
         if (c == null) return;
 
-        var offers = string.Join("  |  ", Enumerable.Range(0, Offers).Select(i =>
-            s.Offer[i] is { } a ? $"[{i + 1}] {a.Title(s.Ru)} ({a.HeroTitle(s.Ru)}) x{s.Rerolls[i]}" : $"[{i + 1}] -"));
-        Chat.PrintToChat(c, s.Ru
-            ? $"[Draft] Слот {s.Round + 1}/{Slots}{(s.Round == Slots - 1 ? " (ульта)" : "")}: {offers}  ·  клавиши 1-3 — взять, R+1-3 — заменить"
-            : $"[Draft] Slot {s.Round + 1}/{Slots}{(s.Round == Slots - 1 ? " (ultimate)" : "")}: {offers}  ·  keys 1-3 pick, R+1-3 reroll");
+        string Line(int i) => s.Offer[i] is { } a ? $"[{i + 1}]  {a.Title(s.Ru)}  ·  {a.HeroTitle(s.Ru)}   (x{s.Rerolls[i]})" : $"[{i + 1}]  —";
+        bool ult = s.Round == Slots - 1;
+        var title = s.Ru ? $"СПОСОБНОСТЬ {s.Round + 1}/{Slots}{(ult ? " · УЛЬТА" : "")}" : $"ABILITY {s.Round + 1}/{Slots}{(ult ? " · ULTIMATE" : "")}";
+        var keys = s.Ru ? "1-3 — взять    R+1-3 — заменить" : "1-3 pick    R+1-3 reroll";
+        Chat.PrintToChat(c, $"{title}: {string.Join("  |  ", Enumerable.Range(0, Offers).Select(Line))}  ·  {keys}");
 
-        if (!HasUi(s)) return;
+        if (!HasUi(s))
+        {
+            // Stock clients have no panel, so the same menu floats over their own hero as world text.
+            var lines = string.Join("\n", Enumerable.Range(0, Offers).Select(Line));
+            SetBillboard(s, $"{title}\n \n{lines}\n \n{keys}");
+            return;
+        }
         var to = RecipientFilter.Single(s.Slot);
         UI.Panel(PanelId).BuildLayout(to, OfferLayout(s));
         if (!s.PanelUp) UI.Panel(PanelId).RequestCursor(to);
@@ -94,7 +119,12 @@ public sealed partial class DraftPlugin
 
     void ShowWaiting(Seat s)
     {
-        if (!HasUi(s)) return;
+        if (!HasUi(s))
+        {
+            SetBillboard(s, (s.Ru ? "НАБОР ГОТОВ\n \n" : "KIT READY\n \n") + string.Join("\n", s.Kit.Select(k => AbilityPool.Find(k!)?.Title(s.Ru) ?? k))
+                + (s.Ru ? "\n \nЖдём остальных…" : "\n \nWaiting for the others…"));
+            return;
+        }
         var to = RecipientFilter.Single(s.Slot);
         var kit = string.Join("  ·  ", s.Kit.Select(k => AbilityPool.Find(k!)?.Title(s.Ru) ?? k));
         UI.Panel(PanelId).BuildLayout(to, Frame(
@@ -112,7 +142,12 @@ public sealed partial class DraftPlugin
             Chat.PrintToChat(c, s.Ru
                 ? "[Draft] Правила матча: клавиша 1 — Standard, клавиша 2 — Street Brawl (или /vote standard, /vote brawl)"
                 : "[Draft] Match rules: key 1 = Standard, key 2 = Street Brawl (or /vote standard, /vote brawl)");
-        if (!HasUi(s)) return;
+        if (!HasUi(s))
+        {
+            string Mark(Rules r) => s.Vote == r ? "  ✔" : "";
+            SetBillboard(s, (s.Ru ? "ПРАВИЛА МАТЧА" : "MATCH RULES") + $"\n \n[1]  Standard{Mark(Rules.Standard)}\n[2]  Street Brawl{Mark(Rules.StreetBrawl)}");
+            return;
+        }
 
         UIButton Choice(string id, string text, string arg, Rules r) =>
             UI.Button(id, text, "vote", arg)
@@ -130,8 +165,55 @@ public sealed partial class DraftPlugin
         s.PanelUp = true;
     }
 
+    // ---- world-text menu for clients without the panel ----------------------------------------------------------
+    void SetBillboard(Seat s, string text)
+    {
+        if (s.Billboard is { IsValid: true }) { s.Billboard.SetMessage(text); return; }
+        var pawn = Players.FromSlot(s.Slot)?.GetHeroPawn();
+        if (pawn == null) return;
+        var t = CPointWorldText.Create(text, pawn.EyePosition, fontSize: 64, worldUnitsPerPx: BillboardScale);
+        if (t == null) { Log($"slot {s.Slot}: world text could not be created"); return; }
+        t.JustifyHorizontal = HorizontalJustify.Center;
+        t.JustifyVertical = VerticalJustify.Center;
+        t.Fullbright = true;
+        s.Billboard = t;
+        PlaceBillboard(s);
+    }
+
+    /// <summary>Holds the menu in front of the player's view, upright and facing them, wherever they look.</summary>
+    void PlaceBillboard(Seat s)
+    {
+        if (s.Billboard is not { IsValid: true } t || Players.FromSlot(s.Slot)?.GetHeroPawn() is not { } pawn) return;
+        var view = pawn.CameraAngles;
+        float pitch = view.X * MathF.PI / 180f, yaw = view.Y * MathF.PI / 180f;
+        var forward = new System.Numerics.Vector3(MathF.Cos(pitch) * MathF.Cos(yaw), MathF.Cos(pitch) * MathF.Sin(yaw), -MathF.Sin(pitch));
+        var up = new System.Numerics.Vector3(MathF.Sin(pitch) * MathF.Cos(yaw), MathF.Sin(pitch) * MathF.Sin(yaw), MathF.Cos(pitch));
+        // point_worldtext reads along its local axes; this yaw/roll pair turns its face back towards the viewer.
+        t.Teleport(pawn.EyePosition + forward * BillboardDistance + up * BillboardRaise, new System.Numerics.Vector3(0, view.Y + 270f, 90f - view.X));
+    }
+
+    public override void OnGameFrame(bool simulating, bool firstTick, bool lastTick)
+    {
+        if (_phase is not (Phase.Drafting or Phase.Voting)) return;
+        foreach (var s in _seats.Values) PlaceBillboard(s);
+    }
+
+    static void ClearBillboard(Seat s)
+    {
+        if (s.Billboard is { IsValid: true }) s.Billboard.Remove();
+        s.Billboard = null;
+    }
+
+    // A menu is private: everybody else's billboard is kept off the wire.
+    public override void OnCheckTransmit(CheckTransmitEvent args)
+    {
+        foreach (var s in _seats.Values)
+            if (s.Slot != args.PlayerSlot && s.Billboard is { IsValid: true } b) args.Hide(b);
+    }
+
     void HidePanel(Seat s)
     {
+        ClearBillboard(s);
         if (!s.PanelUp) return;
         var to = RecipientFilter.Single(s.Slot);
         UI.Panel(PanelId).ReleaseCursor(to);

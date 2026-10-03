@@ -36,7 +36,7 @@ public sealed partial class DraftPlugin
     [Command("newdraft", Description = "Host: end the current match and reload the map into a fresh lobby")]
     public void CmdNewDraft(CCitadelPlayerController? caller = null)
     {
-        if (caller != null && caller.Slot != _hostSlot) throw new CommandException("Only the host can restart.");
+        if (caller != null && caller.Slot != Host()) throw new CommandException("Only the host can restart.");
         Log("host asked for a new lobby");
         _phase = Phase.Lobby;
         Server.ChangeLevel(Server.MapName);
