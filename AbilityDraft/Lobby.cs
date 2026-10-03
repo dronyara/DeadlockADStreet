@@ -42,8 +42,13 @@ public sealed partial class DraftPlugin
     }
 
     // Heroes and teams are part of the draft's premise, so they stay fixed from /draft until the next lobby.
-    public override HookResult OnClientConCommand(ClientConCommandEvent args) =>
-        _phase is Phase.Drafting or Phase.Voting or Phase.Starting && args.Command is "selecthero" or "changeteam" or "jointeam"
+    public override HookResult OnClientConCommand(ClientConCommandEvent args)
+    {
+        if (TraceClientCommands) Log($"clientcmd slot={args.Controller?.Slot} {args.Command} [{string.Join(" ", args.Args)}]");
+        return _phase is Phase.Drafting or Phase.Voting or Phase.Starting && args.Command is "selecthero" or "changeteam" or "jointeam"
             ? HookResult.Stop
             : HookResult.Continue;
+    }
+
+    static readonly bool TraceClientCommands = File.Exists(Path.Combine(Path.GetTempPath(), "abilitydraft.trace"));
 }

@@ -104,3 +104,24 @@ API это даёт (`CCitadelPlayerPawn.AddAbility/RemoveAbility`, `OnGameState
 
 ## Следующий шаг
 Сыграть с друзьями (`tools\host.ps1`), собрать отзывы по балансу пула и по способностям, которые ломаются на чужих героях.
+
+## Эксперимент: штатный экран «Выбор предметов» со способностями (2026-10-04, не закончен)
+Цель — показать драфт способностей родным экраном Street Brawl без клиентских файлов.
+- `citadel_item_draft_force_draw "<имена>"` (нужен `sv_cheats 1`) подставляет в драфт **только предметы** по локализованному имени
+  (`Healbane, Suppressor` работают). Имена способностей (локализованные и внутренние) молча игнорируются.
+- Состояние драфта сетевое и лежит на pawn: `CCitadelPlayerPawn.m_ItemDraftRoundState` (pawn+0x1028 на билде 6745),
+  `ItemDraftRoundState_t`: `m_vecOptions` (+8: count int, +16: указатель), `m_nID` +112, `m_nDraftsRemaining` +116, `m_nDraftsTotal` +120.
+  Элемент `ItemDraftOption_t` — 248 байт: `m_Item` +48, `m_BonusItem1` +112, `m_BonusItem2` +176, `m_bHasBeenDrafted` +240, `m_bRare` +241.
+  `ItemDraftItem_t`: `m_unItemID` +48 (т.е. токен предмета = элемент+96), `m_nUpgradeBits` +52, `m_nAbilityLevel` +56.
+- Токен = MurmurHash2 от имени в нижнем регистре с seed **0x31415926** (`MurmurHash2.HashLowerCase(name, 0x31415926)`);
+  `HashStringCaseless` из API даёт другой seed и не подходит.
+- Клиент выбирает карточку командой **`buyitem <upgrade_name>`**, реролл — **`itemdraftreroll`** (видно в `OnClientConCommand`).
+  Значит, выбор можно перехватить плагином и выдать способность самому.
+- Сервер сам способность из драфта не выдаёт: бот с подменёнными токенами (`citadel_bot_purchase_random_draft_option`) ничего не получил.
+- **Не выяснено главное:** рисует ли клиентский экран карточку для токена способности. Запись в память вектора не помечает поле
+  изменённым, клиенту нужен полный апдейт (`cl_fullupdate`) или запись в тот же тик, что и ролл. Две попытки сорвались:
+  набор `cl_fullupdate` ушёл не в консоль, а в экран драфта как хоткеи (и «купил» предметы), а потом
+  `citadel_street_brawl_reset` перестал запускать новую фазу драфта посреди идущего раунда.
+- Инструменты остались в `Debug.cs`: `draftdump <slot> [имена]`, `draftset <slot> <i> 248 <ability>`, `autopatch <slot> a b c`, `abil`;
+  трассировка клиентских команд — файл `%TEMP%\abilitydraft.trace` при загрузке плагина.
+- Следующий шаг: свежая карта → Street Brawl с первого раунда → `autopatch` до ролла → смотреть экран.

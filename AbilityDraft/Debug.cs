@@ -15,6 +15,26 @@ public sealed partial class DraftPlugin
         try { File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss} {s}{Environment.NewLine}"); } catch { }
     }
 
+    int _patchSlot = -1;
+    uint[] _patchTokens = [];
+
+    /// <summary>Research: rewrites the item ids in a pawn's stock Street Brawl draft options, every frame.</summary>
+    void PatchNativeDraft()
+    {
+        if (_patchSlot < 0 || Players.FromSlot(_patchSlot)?.GetHeroPawn() is not { } pawn) return;
+        var state = new SchemaAccessor<int>("CCitadelPlayerPawn"u8, "m_ItemDraftRoundState"u8, 0).GetAddress(pawn.Handle);
+        int count = System.Runtime.InteropServices.Marshal.ReadInt32(state, 8);
+        var data = System.Runtime.InteropServices.Marshal.ReadIntPtr(state, 16);
+        if (data == IntPtr.Zero) return;
+        for (int i = 0; i < Math.Min(count, _patchTokens.Length); i++)
+        {
+            int at = i * 248 + 96;
+            if ((uint)System.Runtime.InteropServices.Marshal.ReadInt32(data, at) == _patchTokens[i]) continue;
+            System.Runtime.InteropServices.Marshal.WriteInt32(data, at, (int)_patchTokens[i]);
+            Log($"autopatch wrote option {i} tick={GlobalVars.TickCount}");
+        }
+    }
+
     void PollBridge()
     {
         string[] lines;
@@ -98,6 +118,49 @@ public sealed partial class DraftPlugin
             case "angles":
                 foreach (var pawn in Players.GetAllPawns())
                     Log($"  slot={pawn.Controller?.Slot} view={pawn.ViewAngles} eye={pawn.EyeAngles} cam={pawn.CameraAngles} eyepos={pawn.EyePosition}");
+                break;
+            case "draftdump":
+                {
+                    // Raw view of the pawn's native Street Brawl item-draft state (research for reusing the stock draft screen).
+                    var pawn = Players.FromSlot(int.Parse(a[0]))?.GetHeroPawn() ?? throw new Exception("no pawn");
+                    var state = new SchemaAccessor<int>("CCitadelPlayerPawn"u8, "m_ItemDraftRoundState"u8, 0).GetAddress(pawn.Handle);
+                    long Off(ReadOnlySpan<byte> cls, ReadOnlySpan<byte> f) => new SchemaAccessor<int>(cls, f, 0).GetAddress(IntPtr.Zero).ToInt64();
+                    Log($"  state@pawn+0x{state.ToInt64() - pawn.Handle.ToInt64():x} offs: vecOptions={Off("ItemDraftRoundState_t"u8, "m_vecOptions"u8)} id={Off("ItemDraftRoundState_t"u8, "m_nID"u8)} " +
+                        $"total={Off("ItemDraftRoundState_t"u8, "m_nDraftsTotal"u8)} remaining={Off("ItemDraftRoundState_t"u8, "m_nDraftsRemaining"u8)} | option: item={Off("ItemDraftOption_t"u8, "m_Item"u8)} " +
+                        $"bonus1={Off("ItemDraftOption_t"u8, "m_BonusItem1"u8)} bonus2={Off("ItemDraftOption_t"u8, "m_BonusItem2"u8)} rare={Off("ItemDraftOption_t"u8, "m_bRare"u8)} drafted={Off("ItemDraftOption_t"u8, "m_bHasBeenDrafted"u8)} " +
+                        $"| item: id={Off("ItemDraftItem_t"u8, "m_unItemID"u8)} lvl={Off("ItemDraftItem_t"u8, "m_nAbilityLevel"u8)} bits={Off("ItemDraftItem_t"u8, "m_nUpgradeBits"u8)}");
+                    var raw = new byte[0xA0];
+                    System.Runtime.InteropServices.Marshal.Copy(state, raw, 0, raw.Length);
+                    Log("  raw " + Convert.ToHexString(raw));
+                    foreach (var n in a.Skip(1)) Log($"  token {n} = 0x{MurmurHash2.HashLowerCase(n, 0x31415926):x8}");
+                    int count = System.Runtime.InteropServices.Marshal.ReadInt32(state, 8);
+                    var data = System.Runtime.InteropServices.Marshal.ReadIntPtr(state, 16);
+                    var el = new byte[0x300];
+                    System.Runtime.InteropServices.Marshal.Copy(data, el, 0, el.Length);
+                    Log($"  options count={count} data " + Convert.ToHexString(el));
+                    break;
+                }
+            case "draftset":
+                {
+                    // draftset <slot> <option> <stride> <ability>: overwrite a native draft option's item token.
+                    var pawn = Players.FromSlot(int.Parse(a[0]))?.GetHeroPawn() ?? throw new Exception("no pawn");
+                    var state = new SchemaAccessor<int>("CCitadelPlayerPawn"u8, "m_ItemDraftRoundState"u8, 0).GetAddress(pawn.Handle);
+                    var data = System.Runtime.InteropServices.Marshal.ReadIntPtr(state, 16);
+                    int at = int.Parse(a[1]) * int.Parse(a[2]) + 96;
+                    uint old = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(data, at), tok = MurmurHash2.HashLowerCase(a[3], 0x31415926);
+                    System.Runtime.InteropServices.Marshal.WriteInt32(data, at, (int)tok);
+                    Log($"  option {a[1]}: 0x{old:x8} -> 0x{tok:x8} ({a[3]})");
+                    break;
+                }
+            case "abil":
+                foreach (var pawn in Players.GetAllPawns())
+                    Log($"  slot={pawn.Controller?.Slot} all=[{string.Join(", ", pawn.AbilityComponent.Abilities.Where(x => x.IsItem || x.IsSignature).Select(x => $"{x.AbilityName}@{x.AbilitySlot}"))}]");
+                break;
+            case "autopatch":
+                // autopatch <slot> <a> <b> <c>: keep that player's native draft options pointed at these abilities.
+                _patchSlot = int.Parse(a[0]);
+                _patchTokens = a.Skip(1).Select(n => MurmurHash2.HashLowerCase(n, 0x31415926)).ToArray();
+                Log($"autopatch slot={_patchSlot} tokens={string.Join(",", _patchTokens.Select(t => t.ToString("x8")))}");
                 break;
             case "unlock":
                 foreach (var pawn in Players.GetAllPawns())
