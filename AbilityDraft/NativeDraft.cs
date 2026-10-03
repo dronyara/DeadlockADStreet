@@ -13,8 +13,8 @@ public sealed partial class DraftPlugin
     const int RerollsPerPick = 3;
 
     // ItemDraftRoundState_t / ItemDraftOption_t layout (see PATCHING.md, checked with the "draftdump" bridge command).
-    const int StateOptionCount = 8, StateOptionData = 16;
-    const int OptionSize = 248, OptionItemId = 96, OptionRare = 241;
+    const int StateOptionCount = 8, StateOptionData = 16, StateId = 112;
+    const int OptionSize = 248, OptionItemId = 96, OptionUpgradeBits = 100, OptionRare = 241;
     const uint TokenSeed = 0x31415926;
 
     sealed class NativeSeat
@@ -33,6 +33,7 @@ public sealed partial class DraftPlugin
     }
 
     readonly Dictionary<int, NativeSeat> _native = new();
+    InputButton _traceHeld;
     static readonly SchemaAccessor<int> DraftState = new("CCitadelPlayerPawn"u8, "m_ItemDraftRoundState"u8, 0);
     // The header "pick N of M" on the stock screen is drawn from these two counters.
     static readonly int RoundsLeftOffset = (int)new SchemaAccessor<int>("ItemDraftRoundState_t"u8, "m_nRoundsRemaining"u8, 0).GetAddress(IntPtr.Zero);
@@ -77,6 +78,14 @@ public sealed partial class DraftPlugin
             SwitchToStandard();
     }
 
+    /// <summary>Ends a hero's stock draft the way the engine does after the last pick, so the client closes its screen.</summary>
+    static void CloseDraft(CCitadelPlayerPawn pawn)
+    {
+        var state = DraftState.GetAddress(pawn.Handle);
+        for (int i = 0; i < 6 && (Marshal.ReadInt32(state, StateOptionCount) > 0 || Marshal.ReadInt32(state, StateId) != -1); i++)
+            Native.Advance(pawn);
+    }
+
     void SwitchToStandard()
     {
         // Whoever ran out of time gets random abilities for the slots still open.
@@ -98,6 +107,7 @@ public sealed partial class DraftPlugin
         _native.Clear();
         _nativeThenStandard = false;
         Log($"SWITCH TO STANDARD kits={_kits.Count}");
+        foreach (var pawn in Players.GetAllPawns()) CloseDraft(pawn);
 
         // The mode follows this convar live; cycling the game state restarts the match under it.
         // (citadel_street_brawl_reset must NOT be used here: it starts a brawl round whatever the convar says.)
@@ -159,6 +169,8 @@ public sealed partial class DraftPlugin
             ns.Written[i] = MurmurHash2.HashLowerCase(pick.Name, TokenSeed);
             Marshal.WriteInt32(data, i * OptionSize + OptionItemId, (int)ns.Written[i]);
             Marshal.WriteByte(data, i * OptionSize + OptionRare, 0);
+            // Bit 1 of the upgrade bits is the "enhanced" badge the dealt item may have carried.
+            Marshal.WriteByte(data, i * OptionSize + OptionUpgradeBits, (byte)(Marshal.ReadByte(data, i * OptionSize + OptionUpgradeBits) & ~2));
         }
         ns.NextBotAt = Now + BotThinkSeconds;
         (ns.Prev1, ns.Prev2, ns.Prev3) = (true, true, true);      // a key still held from the last pick does not count
@@ -186,7 +198,7 @@ public sealed partial class DraftPlugin
             pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, Math.Max(0, ns.SavedRerolls) + 1);
             if (!ns.Bot && Players.FromSlot(ns.Slot) is { } c)
                 Chat.PrintToChat(c, "[Draft] " + (ns.Ru ? "Твой набор: " : "Your kit: ") + string.Join(", ", ns.Kit.Select(k => AbilityPool.Find(k!)?.Title(ns.Ru) ?? k))
-                    + (!_nativeThenStandard ? "" : ns.Ru ? ". Ждём остальных — предметы с этого экрана в матч не попадут." : ". Waiting for the others - items from this screen will not carry over."));
+                    + (!_nativeThenStandard ? "" : ns.Ru ? ". Ждём остальных игроков." : ". Waiting for the other players."));
             Log($"native slot {ns.Slot} finished: [{string.Join(", ", ns.Kit)}]");
         }
         else
@@ -195,17 +207,25 @@ public sealed partial class DraftPlugin
             pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, pawn.GetCurrency(ECurrencyType.EItemDraftRerolls) + 1);
         }
         // Dealing again is the only thing that makes the client redraw the cards; the reroll spends the one just added.
-        Native.Reroll(pawn);
+        // In a borrowed phase there are no items to go back to: the finished player just gets the screen closed.
+        if (ns.Round >= Slots && _nativeThenStandard) CloseDraft(pawn);
+        else Native.Reroll(pawn);
     }
 
     /// <summary>Ability keys 1-3 on the stock draft screen. Returns true when the input belonged to the native draft.</summary>
     bool NativeInput(AbilityAttemptEvent args)
     {
+        if (TraceClientCommands && !args.Controller!.IsBot && args.HeldButtons != _traceHeld)
+        {
+            _traceHeld = args.HeldButtons;
+            Log($"input slot={args.PlayerSlot} held=[{args.HeldButtons}] native={_native.TryGetValue(args.PlayerSlot, out var t)} round={t?.Round} offer={t?.Offer[0]?.Name}");
+        }
         if (!_native.TryGetValue(args.PlayerSlot, out var ns) || ns.Bot || ns.Round >= Slots || ns.Offer[0] == null) return false;
         args.BlockAll();
         bool k1 = args.IsHeld(InputButton.Ability1), k2 = args.IsHeld(InputButton.Ability2), k3 = args.IsHeld(InputButton.Ability3);
         int pressed = k1 && !ns.Prev1 ? 0 : k2 && !ns.Prev2 ? 1 : k3 && !ns.Prev3 ? 2 : -1;
         (ns.Prev1, ns.Prev2, ns.Prev3) = (k1, k2, k3);
+        if (pressed >= 0) Log($"native slot {ns.Slot} key {pressed + 1}");
         if (pressed >= 0 && args.Controller?.GetHeroPawn() is { } pawn) PickNative(ns, pawn, pressed);
         return true;
     }

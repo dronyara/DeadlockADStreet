@@ -7,18 +7,18 @@ namespace AbilityDraft;
 
 /// <summary>
 /// Two server.dll functions the stock Street Brawl draft uses, called directly so the server can drive the native
-/// draft screen: Skip moves a player on to their next pick, Reroll deals them three new options.
+/// draft screen: Advance uses up a draft pick (and closes the screen after the last one), Reroll deals three new options.
 /// They are located by byte signature; tools/find_sigs.py regenerates the signatures after a game patch.
 /// </summary>
 static unsafe class Native
 {
-    static delegate* unmanaged<IntPtr, void> _skip, _reroll;
+    static delegate* unmanaged<IntPtr, void> _advance, _reroll;
 
-    public static bool Ready => _skip != null && _reroll != null;
+    public static bool Ready => _advance != null && _reroll != null;
 
     public static string Load(string signatureFile)
     {
-        _skip = _reroll = null;
+        _advance = _reroll = null;
         if (!File.Exists(signatureFile)) return $"{signatureFile} is missing - run tools/find_sigs.py";
         var sigs = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(signatureFile)) ?? new();
         ProcessModule? server = null;
@@ -27,13 +27,13 @@ static unsafe class Native
         if (server == null) return "server.dll is not loaded";
 
         var image = new ReadOnlySpan<byte>((void*)server.BaseAddress, server.ModuleMemorySize);
-        var skip = Find(image, sigs.GetValueOrDefault("ItemDraftSkip"));
+        var advance = Find(image, sigs.GetValueOrDefault("ItemDraftAdvance"));
         var reroll = Find(image, sigs.GetValueOrDefault("ItemDraftReroll"));
-        if (skip < 0 || reroll < 0)
-            return $"signature not found (skip={skip >= 0}, reroll={reroll >= 0}) - the game was patched, run tools/find_sigs.py";
-        _skip = (delegate* unmanaged<IntPtr, void>)(server.BaseAddress + skip);
+        if (advance < 0 || reroll < 0)
+            return $"signature not found (advance={advance >= 0}, reroll={reroll >= 0}) - the game was patched, run tools/find_sigs.py";
+        _advance = (delegate* unmanaged<IntPtr, void>)(server.BaseAddress + advance);
         _reroll = (delegate* unmanaged<IntPtr, void>)(server.BaseAddress + reroll);
-        return $"native draft functions resolved: skip=server.dll+0x{skip:x} reroll=server.dll+0x{reroll:x}";
+        return $"native draft functions resolved: advance=server.dll+0x{advance:x} reroll=server.dll+0x{reroll:x}";
     }
 
     /// <summary>Offset of the only match of a "48 8B ? ?" style pattern, or -1 when it is missing or ambiguous.</summary>
@@ -56,6 +56,7 @@ static unsafe class Native
         return found;
     }
 
-    public static void Skip(CCitadelPlayerPawn pawn) => _skip(pawn.Handle);
+    /// <summary>Uses up one of the hero's draft picks: deals the next one, or ends the draft and closes the client's screen.</summary>
+    public static void Advance(CCitadelPlayerPawn pawn) => _advance(pawn.Handle);
     public static void Reroll(CCitadelPlayerPawn pawn) => _reroll(pawn.Handle);
 }

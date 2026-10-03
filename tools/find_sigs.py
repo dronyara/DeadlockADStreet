@@ -89,9 +89,25 @@ def signature(rva, max_len=64):
     raise SystemExit(f"no unique signature within {max_len} bytes at {rva:#x}")
 
 
+def last_call_in(rva, limit=0x400):
+    """Target of the last direct call in the function starting at rva (it ends at the first int3 padding)."""
+    last = None
+    for i in md.disasm(d[rva2off(rva):rva2off(rva) + limit], rva):
+        if i.mnemonic == "int3":
+            break
+        if i.mnemonic == "call" and i.operands[0].type == X86_OP_IMM:
+            last = int(i.op_str, 16)
+    if last is None:
+        raise SystemExit(f"no call found in the function at {rva:#x}")
+    return last
+
+
 sigs = {}
-for key, command in (("ItemDraftSkip", "itemdraftskip"), ("ItemDraftReroll", "itemdraftreroll")):
-    rva = handler_call(command)
+rvas = {key: handler_call(command) for key, command in (("ItemDraftSkip", "itemdraftskip"), ("ItemDraftReroll", "itemdraftreroll"))}
+# Skip is switched off in release builds, but it ends by calling the function that really moves a hero on to the
+# next draft pick - or ends the draft, telling the client to close the screen - and that one has no such gate.
+rvas["ItemDraftAdvance"] = last_call_in(rvas["ItemDraftSkip"])
+for key, rva in rvas.items():
     sigs[key] = signature(rva)
     print(f"{key}: server.dll+{rva:#x}\n    {sigs[key]}")
 
