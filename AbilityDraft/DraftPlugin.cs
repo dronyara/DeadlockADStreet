@@ -1,0 +1,434 @@
+using DeadworksManaged.Api;
+using DeadworksManaged.Api.UI;
+
+namespace AbilityDraft;
+
+/// <summary>
+/// Ability Draft for Deadlock (server side, Deadworks plugin).
+/// Players join and pick heroes as usual; the host types /draft; everyone drafts four abilities, one slot at a
+/// time, from three random offers (each offer can be rerolled, Street Brawl style); then the lobby votes for the
+/// rules (Standard or Street Brawl) and the match starts with the drafted kits.
+/// </summary>
+public sealed partial class DraftPlugin : DeadworksPluginBase
+{
+    public override string Name => "Ability Draft";
+
+    // ---- rules -----------------------------------------------------------------------------------------------
+    const int Slots = 4;                 // Signature1..4; the last one is the ultimate
+    const int Offers = 3;
+    const int RerollsPerOffer = 2;
+    const float DraftSeconds = 120f;
+    const float VoteSeconds = 25f;
+    const float StartDelaySeconds = 5f;
+    const float BotThinkSeconds = 1.5f;
+
+    enum Phase { Lobby, Drafting, Voting, Starting, Match }
+    enum Rules { None, Standard, StreetBrawl }
+
+    sealed class Seat
+    {
+        public int Slot;
+        public bool Bot;
+        public bool Ru = true;
+        public readonly string?[] Kit = new string?[Slots];
+        public int Round;                                   // which ability slot is being drafted (0-3)
+        public readonly AbilityDef?[] Offer = new AbilityDef?[Offers];
+        public readonly int[] Rerolls = new int[Offers];
+        public readonly HashSet<string> Seen = new();       // offered this round, so a reroll never repeats
+        public Rules Vote;
+        public float NextBotAt;
+        public bool Prev1, Prev2, Prev3;
+        public bool PanelUp;
+        public bool Done => Round >= Slots;
+    }
+
+    // ---- state -----------------------------------------------------------------------------------------------
+    Phase _phase = Phase.Lobby;
+    float _phaseEnd;
+    int _hostSlot = -1;
+    Rules _rules = Rules.None;
+    readonly Dictionary<int, Seat> _seats = new();
+    // Finished kits, kept across the map reload a rules change needs and re-applied whenever a hero is rebuilt.
+    readonly Dictionary<int, string[]> _kits = new();
+    IHandle? _loop;
+    float _nextTimerText;
+
+    static float Now => GlobalVars.CurTime;
+
+    // ---- lifecycle ------------------------------------------------------------------------------------------
+    public override void OnLoad(bool isReload)
+    {
+        Log($"=== Ability Draft loaded (reload={isReload}) pool={AbilityPool.All.Length} abilities ===");
+        var panel = UI.Panel(PanelId);
+        panel.On("pick", e => OnUiOffer(e, reroll: false));
+        panel.On("reroll", e => OnUiOffer(e, reroll: true));
+        panel.On("vote", e => { if (e.Caller != null) CastVote(e.Caller.Slot, e.ArgAt(0) == "brawl" ? Rules.StreetBrawl : Rules.Standard); });
+        UI.ClientResync += OnClientResync;
+        if (isReload) BeginMap();
+    }
+
+    public override void OnUnload()
+    {
+        _loop?.Cancel();
+        UI.ClientResync -= OnClientResync;
+    }
+
+    public override void OnPrecacheResources()
+    {
+        // Any hero may end up casting any other hero's ability, so all of their particles and sounds must be loaded.
+        foreach (var hero in AbilityPool.HeroNames) Precache.AddHero(hero);
+    }
+
+    public override void OnStartupServer() => BeginMap();
+
+    void BeginMap()
+    {
+        _loop?.Cancel();
+        _seats.Clear();
+        Server.ExecuteCommand("sv_hibernate_when_empty 0");
+        Server.ExecuteCommand("citadel_allow_duplicate_heroes 1");
+        if (_phase == Phase.Starting)
+        {
+            // The map was reloaded to switch rules: the draft is over, this map is the match.
+            _phase = Phase.Match;
+            Log($"match map loaded, rules={_rules}, kits={_kits.Count}");
+        }
+        else
+        {
+            _phase = Phase.Lobby;
+            _kits.Clear();
+            _rules = Rules.None;
+        }
+        _loop = Timer.Every(0.25.Seconds(), Tick);
+    }
+
+    // The engine runs straight from map load into GameInProgress on a server without a matchmaking lobby.
+    // The lobby and the draft are held in PreGameWait so no troopers spawn and no clock runs until the vote is done.
+    public override bool OnGameStateChanging(EGameState currentState, EGameState newState)
+    {
+        // Asked again every tick while the hold lasts, so nothing is logged here.
+        return newState != EGameState.GameInProgress || _phase == Phase.Match;
+    }
+
+    public override void OnGameStateChanged(EGameState newState) => Log($"game state -> {newState}");
+
+    // ---- players ---------------------------------------------------------------------------------------------
+    public override void OnClientFullConnect(ClientFullConnectEvent args)
+    {
+        var c = args.Controller;
+        if (c == null) return;
+        Log($"player connected slot={args.Slot} name={c.PlayerName} bot={c.IsBot} mapchange={args.IsMapChangeReconnect}");
+        if (c.IsBot) return;
+        if (_hostSlot < 0 || Players.FromSlot(_hostSlot) == null) _hostSlot = args.Slot;
+        if (_phase == Phase.Lobby)
+            Chat.PrintToChat(c, args.Slot == _hostSlot
+                ? "[Draft] Ты хост. Когда все выберут героев, напиши /draft. | You are the host: type /draft when everyone has a hero."
+                : "[Draft] Выбери героя и жди, пока хост начнёт драфт. | Pick a hero and wait for the host to start the draft.");
+    }
+
+    public override void OnClientDisconnect(ClientDisconnectedEvent args)
+    {
+        if (args.IsMapChange) return;
+        _seats.Remove(args.Slot);
+        _kits.Remove(args.Slot);
+        if (args.Slot == _hostSlot)
+        {
+            _hostSlot = Players.GetAll().FirstOrDefault(p => !p.IsBot && p.Slot != args.Slot)?.Slot ?? -1;
+            if (_hostSlot >= 0) Chat.PrintToChat(_hostSlot, "[Draft] Теперь ты хост. | You are the host now.");
+        }
+    }
+
+    public override void OnPawnHeroInitialized(CCitadelPlayerPawn pawn)
+    {
+        var c = pawn.Controller;
+        if (c == null || !_kits.TryGetValue(c.Slot, out var kit)) return;
+        ApplyKit(pawn, kit);
+    }
+
+    // ---- main loop -------------------------------------------------------------------------------------------
+    void Tick()
+    {
+        PollBridge();
+        switch (_phase)
+        {
+            case Phase.Drafting: TickDraft(); break;
+            case Phase.Voting: TickVote(); break;
+            case Phase.Starting: if (Now >= _phaseEnd) StartMatch(); break;
+        }
+    }
+
+    // ---- draft -----------------------------------------------------------------------------------------------
+    [Command("draft", Description = "Host: start the ability draft for everyone on the server")]
+    public void CmdDraft(CCitadelPlayerController? caller = null)
+    {
+        if (caller != null && caller.Slot != _hostSlot) throw new CommandException("Only the host can start the draft.");
+        if (_phase != Phase.Lobby) throw new CommandException($"Draft is already running ({_phase}).");
+        StartDraft();
+    }
+
+    void StartDraft()
+    {
+        _seats.Clear();
+        _kits.Clear();
+        foreach (var c in Players.GetAll())
+        {
+            if (c.GetHeroPawn() == null)
+            {
+                if (!c.IsBot) Chat.PrintToChat(c, "[Draft] Нет героя — ты пропускаешь драфт. | No hero picked, you sit this draft out.");
+                continue;
+            }
+            var s = new Seat { Slot = c.Slot, Bot = c.IsBot, NextBotAt = Now + BotThinkSeconds };
+            _seats[c.Slot] = s;
+            DealRound(s);
+        }
+        if (_seats.Count == 0) throw new CommandException("Nobody has a hero yet.");
+
+        _phase = Phase.Drafting;
+        _phaseEnd = Now + DraftSeconds;
+        _nextTimerText = 0;
+        Log($"DRAFT START seats={string.Join(",", _seats.Keys)}");
+        Announce("ABILITY DRAFT", "Выбери 4 способности · Pick 4 abilities");
+        foreach (var s in _seats.Values) ShowOffer(s);
+    }
+
+    void DealRound(Seat s)
+    {
+        s.Seen.Clear();
+        for (int i = 0; i < Offers; i++)
+        {
+            s.Offer[i] = null;
+            s.Rerolls[i] = RerollsPerOffer;
+        }
+        for (int i = 0; i < Offers; i++) s.Offer[i] = Roll(s);
+    }
+
+    /// <summary>A random ability for the current round: ultimates only in the last slot, never one already owned or shown.</summary>
+    AbilityDef? Roll(Seat s)
+    {
+        bool ult = s.Round == Slots - 1;
+        var pool = AbilityPool.All.Where(a => a.Ult == ult && !s.Kit.Contains(a.Name) && !s.Seen.Contains(a.Name)).ToList();
+        if (pool.Count == 0) return null;
+        var pick = pool[Random.Shared.Next(pool.Count)];
+        s.Seen.Add(pick.Name);
+        return pick;
+    }
+
+    bool Reroll(Seat s, int i)
+    {
+        if (_phase != Phase.Drafting || s.Done || i < 0 || i >= Offers || s.Rerolls[i] <= 0) return false;
+        var next = Roll(s);
+        if (next == null) return false;
+        s.Rerolls[i]--;
+        Log($"slot {s.Slot} round {s.Round + 1} reroll offer {i + 1}: {s.Offer[i]?.Name} -> {next.Name} (left {s.Rerolls[i]})");
+        s.Offer[i] = next;
+        ShowOffer(s);
+        return true;
+    }
+
+    bool Pick(Seat s, int i)
+    {
+        if (_phase != Phase.Drafting || s.Done || i < 0 || i >= Offers || s.Offer[i] == null) return false;
+        var a = s.Offer[i]!;
+        s.Kit[s.Round] = a.Name;
+        Log($"slot {s.Slot} round {s.Round + 1} picked {a.Name} ({a.En}, {a.HeroEn})");
+        s.Round++;
+        s.NextBotAt = Now + BotThinkSeconds;
+        if (s.Done) FinishSeat(s);
+        else
+        {
+            DealRound(s);
+            ShowOffer(s);
+        }
+        return true;
+    }
+
+    void FinishSeat(Seat s)
+    {
+        var kit = s.Kit.Select(k => k!).ToArray();
+        _kits[s.Slot] = kit;
+        var c = Players.FromSlot(s.Slot);
+        var pawn = c?.GetHeroPawn();
+        if (pawn != null) ApplyKit(pawn, kit);
+        if (c != null && !s.Bot)
+        {
+            Chat.PrintToChat(c, "[Draft] " + (s.Ru ? "Твой набор: " : "Your kit: ") + string.Join(", ", kit.Select(k => AbilityPool.Find(k)?.Title(s.Ru) ?? k)));
+            ShowWaiting(s);
+        }
+    }
+
+    void TickDraft()
+    {
+        foreach (var s in _seats.Values.Where(s => !s.Done).ToList())
+        {
+            if (Players.FromSlot(s.Slot) == null) { _seats.Remove(s.Slot); continue; }
+            if ((s.Bot || Now >= _phaseEnd) && Now >= s.NextBotAt)
+            {
+                // Bots, and humans who ran out of time, take a random offer.
+                while (!s.Done && (Now >= _phaseEnd || s.Bot))
+                {
+                    if (!Pick(s, Random.Shared.Next(Offers))) break;
+                    if (s.Bot && Now < _phaseEnd) break;          // bots pick one slot per think so the log reads in order
+                }
+            }
+        }
+        if (Now >= _nextTimerText)
+        {
+            _nextTimerText = Now + 1f;
+            int left = Math.Max(0, (int)MathF.Ceiling(_phaseEnd - Now));
+            foreach (var s in _seats.Values.Where(s => s.PanelUp)) UI.Panel(PanelId).Set(RecipientFilter.Single(s.Slot), "ad_timer", $"{left}");
+        }
+        if (_seats.Count == 0) { CancelDraft("everyone left"); return; }
+        if (_seats.Values.All(s => s.Done)) StartVote();
+    }
+
+    void CancelDraft(string why)
+    {
+        Log($"draft cancelled: {why}");
+        foreach (var s in _seats.Values) HidePanel(s);
+        _seats.Clear();
+        _phase = Phase.Lobby;
+    }
+
+    [Command("draftcancel", Description = "Host: cancel the running draft and go back to the lobby")]
+    public void CmdCancel(CCitadelPlayerController? caller = null)
+    {
+        if (caller != null && caller.Slot != _hostSlot) throw new CommandException("Only the host can cancel the draft.");
+        if (_phase is not (Phase.Drafting or Phase.Voting)) throw new CommandException("No draft is running.");
+        CancelDraft("host");
+        Chat.PrintToChatAll("[Draft] Драфт отменён. | Draft cancelled.");
+    }
+
+    // ---- applying a kit --------------------------------------------------------------------------------------
+    void ApplyKit(CCitadelPlayerPawn pawn, string[] kit)
+    {
+        try
+        {
+            var before = KitOf(pawn);
+            if (before.SequenceEqual(kit)) return;
+            // Clear all four slots first: a drafted ability may already sit in another slot of this hero.
+            for (int i = 0; i < Slots; i++)
+                if (pawn.GetAbilityBySlot((EAbilitySlot)i) is CCitadelBaseAbility old && !pawn.RemoveAbility(old))
+                    Log($"  could not remove {old.AbilityName} from slot {i + 1}");
+            for (int i = 0; i < Slots; i++)
+                if (pawn.AddAbility(kit[i], (ushort)i) == null)
+                    Log($"  could not add {kit[i]} to slot {i + 1}");
+            Log($"kit applied slot={pawn.Controller?.Slot} hero={pawn.HeroID}: [{string.Join(", ", before)}] -> [{string.Join(", ", KitOf(pawn))}]");
+        }
+        catch (Exception ex)
+        {
+            Log($"ApplyKit failed: {ex}");
+        }
+    }
+
+    static string[] KitOf(CCitadelPlayerPawn pawn) =>
+        Enumerable.Range(0, Slots).Select(i => (pawn.GetAbilityBySlot((EAbilitySlot)i) as CCitadelBaseAbility)?.AbilityName ?? "-").ToArray();
+
+    // ---- vote ------------------------------------------------------------------------------------------------
+    void StartVote()
+    {
+        _phase = Phase.Voting;
+        _phaseEnd = Now + VoteSeconds;
+        Log("VOTE START");
+        Announce("ГОЛОСОВАНИЕ · VOTE", "1 — Standard   2 — Street Brawl");
+        foreach (var s in _seats.Values)
+        {
+            s.Vote = Rules.None;
+            s.Prev1 = s.Prev2 = s.Prev3 = true;     // a key still held from the last pick must not count as a vote
+            if (s.Bot) continue;
+            ShowVote(s);
+        }
+        if (_seats.Values.All(s => s.Bot)) _phaseEnd = Now + 1f;
+    }
+
+    void CastVote(int slot, Rules r)
+    {
+        if (_phase != Phase.Voting || !_seats.TryGetValue(slot, out var s) || r == Rules.None) return;
+        s.Vote = r;
+        Log($"slot {slot} votes {r}");
+        var name = Players.FromSlot(slot)?.PlayerName ?? $"#{slot}";
+        Chat.PrintToChatAll($"[Draft] {name}: {RulesName(r)}");
+        ShowVote(s);
+    }
+
+    void TickVote()
+    {
+        var humans = _seats.Values.Where(s => !s.Bot).ToList();
+        if (Now < _phaseEnd && humans.Any(s => s.Vote == Rules.None)) return;
+
+        int std = humans.Count(s => s.Vote == Rules.Standard), brawl = humans.Count(s => s.Vote == Rules.StreetBrawl);
+        // A tie goes to the host's vote, and to Standard when the host did not vote.
+        _rules = brawl > std ? Rules.StreetBrawl
+            : std > brawl ? Rules.Standard
+            : _seats.TryGetValue(_hostSlot, out var h) && h.Vote != Rules.None ? h.Vote : Rules.Standard;
+        if (_forcedRules != Rules.None) (_rules, _forcedRules) = (_forcedRules, Rules.None);
+        Log($"VOTE RESULT standard={std} brawl={brawl} -> {_rules}");
+
+        foreach (var s in _seats.Values) HidePanel(s);
+        _phase = Phase.Starting;
+        _phaseEnd = Now + StartDelaySeconds;
+        Announce(RulesName(_rules).ToUpperInvariant(), $"Матч начнётся через {StartDelaySeconds:0} с · Match starts in {StartDelaySeconds:0} s");
+        Chat.PrintToChatAll($"[Draft] Правила: {RulesName(_rules)} ({std}:{brawl}). Матч начинается!");
+    }
+
+    static string RulesName(Rules r) => r == Rules.StreetBrawl ? "Street Brawl" : "Standard";
+
+    [Command("vote", Description = "Vote for the rules: /vote standard | /vote brawl")]
+    public void CmdVote(CCitadelPlayerController caller, string rules)
+    {
+        if (_phase != Phase.Voting) throw new CommandException("There is no vote right now.");
+        var r = rules.ToLowerInvariant() switch
+        {
+            "1" or "s" or "std" or "standard" or "стандарт" => Rules.Standard,
+            "2" or "b" or "sb" or "brawl" or "street" or "streetbrawl" => Rules.StreetBrawl,
+            _ => throw new CommandException("Use /vote standard or /vote brawl."),
+        };
+        CastVote(caller.Slot, r);
+    }
+
+    // ---- input (works without the Deadworks launcher UI) ------------------------------------------------------
+    // While drafting, ability keys 1-3 take the offer and holding Reload (R) with 1-3 rerolls it.
+    // While voting, 1 = Standard and 2 = Street Brawl. Hero abilities stay blocked the whole time.
+    public override void OnAbilityAttempt(AbilityAttemptEvent args)
+    {
+        if (_phase is not (Phase.Drafting or Phase.Voting)) return;
+        if (!_seats.TryGetValue(args.PlayerSlot, out var s) || s.Bot) return;
+        args.BlockAll();
+
+        bool k1 = args.IsHeld(InputButton.Ability1), k2 = args.IsHeld(InputButton.Ability2), k3 = args.IsHeld(InputButton.Ability3);
+        int pressed = k1 && !s.Prev1 ? 0 : k2 && !s.Prev2 ? 1 : k3 && !s.Prev3 ? 2 : -1;
+        (s.Prev1, s.Prev2, s.Prev3) = (k1, k2, k3);
+        if (pressed < 0) return;
+
+        if (_phase == Phase.Voting)
+        {
+            if (pressed < 2) CastVote(s.Slot, pressed == 0 ? Rules.Standard : Rules.StreetBrawl);
+        }
+        else if (args.IsHeld(InputButton.Reload)) Reroll(s, pressed);
+        else Pick(s, pressed);
+    }
+
+    [Command("pick", Description = "Draft: take offer 1-3")]
+    public void CmdPick(CCitadelPlayerController caller, int offer)
+    {
+        if (!_seats.TryGetValue(caller.Slot, out var s) || !Pick(s, offer - 1)) throw new CommandException("Nothing to pick.");
+    }
+
+    [Command("reroll", "rr", Description = "Draft: replace offer 1-3 (2 per offer)")]
+    public void CmdReroll(CCitadelPlayerController caller, int offer)
+    {
+        if (!_seats.TryGetValue(caller.Slot, out var s) || !Reroll(s, offer - 1)) throw new CommandException("No rerolls left for that offer.");
+    }
+
+    [Command("lang", Description = "Draft text language: /lang ru | /lang en")]
+    public void CmdLang(CCitadelPlayerController caller, string lang)
+    {
+        if (!_seats.TryGetValue(caller.Slot, out var s)) throw new CommandException("You are not in the draft.");
+        s.Ru = lang.StartsWith("ru", StringComparison.OrdinalIgnoreCase);
+        if (_phase == Phase.Drafting && !s.Done) ShowOffer(s);
+    }
+
+    static void Announce(string title, string text)
+    {
+        foreach (var c in Players.GetAll().Where(c => !c.IsBot)) c.HudAnnounce(title, text);
+    }
+}

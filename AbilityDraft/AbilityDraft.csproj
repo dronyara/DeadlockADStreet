@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <DeadlockDir Condition="'$(DeadlockDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Deadlock</DeadlockDir>
+    <ManagedDir>$(DeadlockDir)\game\bin\win64\managed</ManagedDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="DeadworksManaged.Api">
+      <HintPath>$(ManagedDir)\DeadworksManaged.Api.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Google.Protobuf">
+      <HintPath>$(ManagedDir)\Google.Protobuf.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <Target Name="DeployToGame" AfterTargets="Build">
+    <Copy SourceFiles="$(OutputPath)AbilityDraft.dll;$(OutputPath)AbilityDraft.pdb" DestinationFolder="$(ManagedDir)\plugins" SkipUnchangedFiles="false" Retries="0" ContinueOnError="WarnAndContinue" />
+  </Target>
+</Project>

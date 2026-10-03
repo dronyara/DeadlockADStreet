@@ -1,0 +1,58 @@
+# MODLOG — Deadlock: Ability Draft (в стиле Street Brawl)
+
+## Цель
+Хост поднимает сервер, игроки заходят и выбирают героев, хост пишет `/draft` — у всех открывается выбор
+способностей «1 из 3» на каждый из 4 слотов (4-й слот — ульты), каждое предложение можно заменить 2 раза.
+Потом голосование за правила (Standard / Street Brawl) и старт матча с набранными наборами.
+Готово = работает на локальном сервере, проверено в игре + короткий клип.
+
+## Разведка (2026-10-04)
+- Deadlock, Steam appid 1422450, Source 2. `steam.inf`: ClientVersion/ServerVersion **6745** (02.10.2026).
+  В appmanifest висит ещё одно обновление (TargetBuildID 25689475 ≠ buildid 25658155) — после него Deadworks может снова отвалиться.
+- Античит: VAC на официальных серверах. Клиент НЕ трогаем. Всё — серверный плагин на своём сервере (`-insecure`, LAN).
+- Уже стоит с прошлой сессии (см. `..\scratch-2026-10-01-b401b6\MODLOG.md`): Deadworks v0.5.1 в папке игры,
+  .NET SDK 10.0.401 в `%LOCALAPPDATA%\Microsoft\dotnet`, плагин ClashArena, читалка VRF (`tools/vrf`).
+- `um` CLI: bash-обёртка берёт заглушку `python3` из WindowsApps; работает как `PYTHONPATH=<plugin root> python -m um ...`
+  (`um scan` ок, `um kb` требует PyYAML). В базе знаний заметок по Deadlock/Source 2 нет.
+
+## Маршрут
+Loader API: серверный плагин Deadworks (C#, .NET 10). Причина: нужна логика (драфт, подмена способностей, смена режима),
+API это даёт (`CCitadelPlayerPawn.AddAbility/RemoveAbility`, `OnGameStateChanging`, `UI.Panel`, `OnAbilityAttempt`); клиент не модифицируется.
+
+## Факты (источник — файлы игры и API)
+- Способности героя: `scripts/heroes.vdata` → `m_mapBoundAbilities.ESlot_Signature_1..4`; тип — `m_eAbilityType`
+  (`EAbilityType_Ultimate` для ульты) в `scripts/abilities.vdata`; иконка — `m_strAbilityImage`.
+  Выпущенные герои = `m_bDisabled=false && m_bInDevelopment=false` и есть 4 сигнатуры: 38 героев, 152 способности (38 ульт).
+  У Билли (punkgoat) ульта стоит в `Signature_4` как и у всех, хотя называется `ability_punkgoat_tether`, а `ability_punkgoat_ult` — обычная.
+- Имена: loose-файлы `game/citadel/resource/localization/citadel_heroes/citadel_heroes_<lang>.txt` (ключ = имя способности),
+  герои — `citadel_gc_hero_names` (ключ `hero_x:n`, в русском префикс `#|m|#`).
+- `EAbilitySlot`: Signature1..4 = 0..3. `InputButton.Ability1..4`, `Reload`.
+- Без лобби сервер на `dl_midtown` сам пролетает WaitingForPlayersToJoin → … → PreGameWait → GameInProgress за секунду при загрузке карты.
+  `OnGameStateChanging(...)=false` вето на движковые переходы; `GameRules.ChangeGameState` из плагина вето не подлежит.
+- Режим: `GameRules.GameMode` только на чтение (`ECitadelGameMode.StreetBrawl=4`). В server.dll рядом с `citadel_coop_sandbox` /
+  `citadel_one_on_one_match` лежит cvar `citadel_gamemode_streetbrawl_enabled` → гипотеза: читается при загрузке карты, нужен reload карты.
+  Ещё: `citadel_item_draft_enabled` («1=only street brawl 2=always»), `citadel_street_brawl_reset`, `citadel_street_brawl_advance_state`.
+- UI-панели Deadworks (`UI.Panel`) видят только игроки, зашедшие через лаунчер Deadworks (`UI.HasClientBootstrap(slot)`).
+  Поэтому драфт дублируется в чат + клавиши: 1-3 взять, R+1-3 заменить; голосование 1/2.
+
+## Код
+- `AbilityDraft/DraftPlugin.cs` — фазы Lobby → Drafting → Voting → Starting → Match, драфт, голосование, ввод.
+- `AbilityDraft/Ui.cs` — панель (карточки, кнопки) + чат. `Match.cs` — старт матча. `Debug.cs` — лог и тестовый мост.
+- `AbilityDraft/AbilityPool.g.cs` — генерится `tools/gen_pool.py` из vdata локальной установки (только имена/id).
+- Лог плагина: `%TEMP%\abilitydraft.log`; лог сервера: `game/citadel/console.log`.
+- Мост для тестов без клиента: строки в `%TEMP%\abilitydraft.cmd` (`state`, `cvars <s>`, `sv <cmd>`, `bot <name>`, `draft`,
+  `pick <slot> <n>`, `reroll <slot> <n>`, `vote <slot> s|b`, `forcevote s|b`, `kits`, `cast <slot> <1-4>`).
+
+## Изменения на машине
+- `game/bin/win64/managed/plugins/ClashArena.{dll,pdb}` перенесены в `managed/plugins-disabled/` (он перестраивает dl_midtown под свою арену).
+  Вернуть: перенести обратно в `plugins/`.
+- В `managed/plugins/` кладётся `AbilityDraft.dll` (сборка `dotnet build AbilityDraft -c Release`).
+
+## Грабли
+1. 2026-10-04: Deadworks v0.5.1 не стартует на билде 6745: `Failed to find signatures: CCitadelGameRules::BuildGameSessionManifest`,
+   процесс молча выходит, `console.log` не создаётся. Чинится обновлением Deadworks (v0.5.3 от 03.10.2026 — «updated signatures + offsets»).
+   Диагностика: запустить `deadworks.exe` с `-RedirectStandardOutput`.
+
+## Следующий шаг
+Обновить Deadworks до v0.5.3 (нужно разрешение пользователя), проверить гипотезу про `citadel_gamemode_streetbrawl_enabled`,
+прогнать драфт на ботах, затем проверка клиентом.
