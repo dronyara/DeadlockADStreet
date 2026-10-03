@@ -77,6 +77,37 @@ public sealed partial class DraftPlugin
                     Log($"  LANES active={ConVar.Find(ActiveLaneCvar)?.GetInt()} brawl={ConVar.Find(BrawlCvar)?.GetBool()} guardians[{Per("npc_trooper_boss")}] walkers[{Per("npc_boss_tier2")}] barracks[{Per("npc_barrack_boss")}] troopers[{Per("npc_trooper")}]");
                     break;
                 }
+            case "pdg":
+                {
+                    // Research for the TAB upgrade panel: the per-player networked ability lists.
+                    var c = Players.FromSlot(int.Parse(a[0])) ?? throw new Exception("no such slot");
+                    var pdg = c.PlayerDataGlobal.Handle;
+                    void Vec(string label, ReadOnlySpan<byte> field, int elemBytes)
+                    {
+                        var at = new SchemaAccessor<int>("PlayerDataGlobal_t"u8, field, 0).GetAddress(pdg);
+                        // Networked vectors here are CUtlVectorEmbeddedNetworkVar-like: try both common header shapes.
+                        var head = new byte[32];
+                        System.Runtime.InteropServices.Marshal.Copy(at, head, 0, 32);
+                        int count = BitConverter.ToInt32(head, 0);
+                        long ptr = BitConverter.ToInt64(head, 8);
+                        string body = "";
+                        if (count > 0 && count < 64 && ptr != 0)
+                        {
+                            var raw = new byte[Math.Min(count * elemBytes, 512)];
+                            System.Runtime.InteropServices.Marshal.Copy((IntPtr)ptr, raw, 0, raw.Length);
+                            body = Convert.ToHexString(raw);
+                        }
+                        Log($"  {label} off={at.ToInt64() - pdg.ToInt64()} head={Convert.ToHexString(head)} count={count} data={body}");
+                    }
+                    Vec("AbilityUpgradeState", "m_vecAbilityUpgradeState"u8, 64);
+                    Vec("StolenAbilities", "m_vecStolenAbilities"u8, 64);
+                    Vec("Upgrades", "m_vecUpgrades"u8, 16);
+                    var pawn = c.GetHeroPawn();
+                    if (pawn != null)
+                        foreach (var ab in pawn.AbilityComponent.Abilities.Where(x => x.IsSignature))
+                            Log($"  ability {ab.AbilityName} slot={ab.AbilitySlot} token=0x{MurmurHash2.HashLowerCase(ab.AbilityName, 0x31415926):x8} bits={ab.UpgradeBits}");
+                    break;
+                }
             case "kits":
                 foreach (var pawn in Players.GetAllPawns())
                     Log($"  kit slot={pawn.Controller?.Slot} hero={pawn.HeroID} lvl={pawn.Level} [{string.Join(", ", KitOf(pawn))}]");
