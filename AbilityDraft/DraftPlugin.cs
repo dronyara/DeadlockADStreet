@@ -386,6 +386,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     // While voting, 1 = Standard and 2 = Street Brawl. Hero abilities stay blocked the whole time.
     public override void OnAbilityAttempt(AbilityAttemptEvent args)
     {
+        if (NativeInput(args)) return;
         if (_phase is not (Phase.Drafting or Phase.Voting)) return;
         if (!_seats.TryGetValue(args.PlayerSlot, out var s) || s.Bot) return;
         args.BlockAll();

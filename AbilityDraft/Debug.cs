@@ -15,24 +15,67 @@ public sealed partial class DraftPlugin
         try { File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss} {s}{Environment.NewLine}"); } catch { }
     }
 
-    int _patchSlot = -1;
-    uint[] _patchTokens = [];
+    // ---- research: the stock Street Brawl draft screen showing abilities -----------------------------------------
+    // The server rewrites the item ids of the three native draft options to ability ids as soon as they are rolled.
+    // Clicking such a card crashes the client, so picks come from ability keys 1-3 and are applied here;
+    // itemdraftskip then moves the stock screen on to its next roll, which is patched again.
+    int _nativeSlot = -1, _nativeRound;
+    readonly string?[] _nativeKit = new string?[Slots];
+    readonly AbilityDef?[] _nativeOffer = new AbilityDef?[Offers];
+    readonly uint[] _nativeWritten = new uint[Offers];
+    bool _nativePrev1, _nativePrev2, _nativePrev3;
 
-    /// <summary>Research: rewrites the item ids in a pawn's stock Street Brawl draft options, every frame.</summary>
+    static uint Token(string name) => MurmurHash2.HashLowerCase(name, 0x31415926);
+
     void PatchNativeDraft()
     {
-        if (_patchSlot < 0 || Players.FromSlot(_patchSlot)?.GetHeroPawn() is not { } pawn) return;
+        if (_nativeSlot < 0 || _nativeRound >= Slots || Players.FromSlot(_nativeSlot)?.GetHeroPawn() is not { } pawn) return;
         var state = new SchemaAccessor<int>("CCitadelPlayerPawn"u8, "m_ItemDraftRoundState"u8, 0).GetAddress(pawn.Handle);
         int count = System.Runtime.InteropServices.Marshal.ReadInt32(state, 8);
         var data = System.Runtime.InteropServices.Marshal.ReadIntPtr(state, 16);
-        if (data == IntPtr.Zero) return;
-        for (int i = 0; i < Math.Min(count, _patchTokens.Length); i++)
+        if (data == IntPtr.Zero || count < Offers) return;
+        bool fresh = false;
+        for (int i = 0; i < Offers; i++)
+            fresh |= (uint)System.Runtime.InteropServices.Marshal.ReadInt32(data, i * 248 + 96) != _nativeWritten[i] || _nativeWritten[i] == 0;
+        if (!fresh) return;
+
+        bool ult = _nativeRound == Slots - 1;
+        var pool = AbilityPool.All.Where(x => x.Ult == ult && !_nativeKit.Contains(x.Name)).OrderBy(_ => Random.Shared.Next()).Take(Offers).ToArray();
+        for (int i = 0; i < Offers; i++)
         {
-            int at = i * 248 + 96;
-            if ((uint)System.Runtime.InteropServices.Marshal.ReadInt32(data, at) == _patchTokens[i]) continue;
-            System.Runtime.InteropServices.Marshal.WriteInt32(data, at, (int)_patchTokens[i]);
-            Log($"autopatch wrote option {i} tick={GlobalVars.TickCount}");
+            _nativeOffer[i] = pool[i];
+            _nativeWritten[i] = Token(pool[i].Name);
+            System.Runtime.InteropServices.Marshal.WriteInt32(data, i * 248 + 96, (int)_nativeWritten[i]);
+            System.Runtime.InteropServices.Marshal.WriteByte(data, i * 248 + 241, 0);      // m_bRare
         }
+        // The stock header reads "pick N of M" from these two counters.
+        System.Runtime.InteropServices.Marshal.WriteInt32(state, 120, Slots);
+        System.Runtime.InteropServices.Marshal.WriteInt32(state, 116, Slots - _nativeRound);
+        // Raw writes are invisible to the network layer; re-setting the field through the schema accessor flags it as changed.
+        var touch = new SchemaAccessor<long>("CCitadelPlayerPawn"u8, "m_ItemDraftRoundState"u8, 0);
+        touch.Set(pawn.Handle, touch.Get(pawn.Handle));
+        Log($"native round {_nativeRound + 1}: offered {string.Join(", ", pool.Select(x => x.Name))} tick={GlobalVars.TickCount}");
+    }
+
+    bool NativeInput(AbilityAttemptEvent args)
+    {
+        if (_nativeSlot != args.PlayerSlot || _nativeRound >= Slots) return false;
+        args.BlockAll();
+        bool k1 = args.IsHeld(InputButton.Ability1), k2 = args.IsHeld(InputButton.Ability2), k3 = args.IsHeld(InputButton.Ability3);
+        int pressed = k1 && !_nativePrev1 ? 0 : k2 && !_nativePrev2 ? 1 : k3 && !_nativePrev3 ? 2 : -1;
+        (_nativePrev1, _nativePrev2, _nativePrev3) = (k1, k2, k3);
+        if (pressed < 0 || _nativeOffer[pressed] is not { } pick) return true;
+
+        var pawn = args.Controller?.GetHeroPawn();
+        if (pawn == null) return true;
+        if (pawn.GetAbilityBySlot((EAbilitySlot)_nativeRound) is CCitadelBaseAbility old) pawn.RemoveAbility(old);
+        var added = pawn.AddAbility(pick.Name, (ushort)_nativeRound);
+        _nativeKit[_nativeRound] = pick.Name;
+        Log($"native round {_nativeRound + 1}: key {pressed + 1} -> {pick.Name} (added={added != null}); kit now [{string.Join(", ", KitOf(pawn))}]");
+        _nativeRound++;
+        Array.Clear(_nativeOffer);
+        Array.Clear(_nativeWritten);          // next frame deals the next slot's offers
+        return true;
     }
 
     void PollBridge()
@@ -156,11 +199,22 @@ public sealed partial class DraftPlugin
                 foreach (var pawn in Players.GetAllPawns())
                     Log($"  slot={pawn.Controller?.Slot} all=[{string.Join(", ", pawn.AbilityComponent.Abilities.Where(x => x.IsItem || x.IsSignature).Select(x => $"{x.AbilityName}@{x.AbilitySlot}"))}]");
                 break;
-            case "autopatch":
-                // autopatch <slot> <a> <b> <c>: keep that player's native draft options pointed at these abilities.
-                _patchSlot = int.Parse(a[0]);
-                _patchTokens = a.Skip(1).Select(n => MurmurHash2.HashLowerCase(n, 0x31415926)).ToArray();
-                Log($"autopatch slot={_patchSlot} tokens={string.Join(",", _patchTokens.Select(t => t.ToString("x8")))}");
+            case "cc":
+                Server.ClientCommand(int.Parse(a[0]), string.Join(' ', a.Skip(1)));
+                Log($"sent to client {a[0]}: {string.Join(' ', a.Skip(1))}");
+                break;
+            case "rerolls":
+                {
+                    var pawn = Players.FromSlot(int.Parse(a[0]))?.GetHeroPawn() ?? throw new Exception("no pawn");
+                    Log($"rerolls {pawn.GetCurrency(ECurrencyType.EItemDraftRerolls)} -> {a[1]}");
+                    pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, int.Parse(a[1]));
+                    break;
+                }
+            case "native":
+                _nativeSlot = int.Parse(a[0]);
+                _nativeRound = 0;
+                Array.Clear(_nativeKit); Array.Clear(_nativeOffer); Array.Clear(_nativeWritten);
+                Log($"native draft armed for slot {_nativeSlot}");
                 break;
             case "unlock":
                 foreach (var pawn in Players.GetAllPawns())
