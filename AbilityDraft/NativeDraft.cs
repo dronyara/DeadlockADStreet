@@ -112,6 +112,7 @@ public sealed partial class DraftPlugin
         // The mode follows this convar live; cycling the game state restarts the match under it.
         // (citadel_street_brawl_reset must NOT be used here: it starts a brawl round whatever the convar says.)
         Server.ExecuteCommand($"{BrawlCvar} 0");
+        Server.ExecuteCommand($"{ActiveLaneCvar} 0");
         GameRules.ChangeGameState(EGameState.PreGameWait);
         GameRules.ChangeGameState(EGameState.GameInProgress);
         GameRules.SetGameStartTime(Now);

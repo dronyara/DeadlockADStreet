@@ -70,6 +70,13 @@ public sealed partial class DraftPlugin
                 new SchemaAccessor<int>("CCitadelGameRules"u8, "m_eGameMode"u8, 0).Set(GameRules.Pointer, int.Parse(a[0]));
                 Log($"m_eGameMode := {a[0]}");
                 break;
+            case "lanes":
+                {
+                    // Objectives and troopers per lane number, plus the lane convar.
+                    string Per(string name) => string.Join(" ", Entities.ByDesignerName(name).GroupBy(e => e.GetField<int>("CBaseEntity"u8, "m_iLane"u8)).OrderBy(g => g.Key).Select(g => $"L{g.Key}:{g.Count()}"));
+                    Log($"  LANES active={ConVar.Find(ActiveLaneCvar)?.GetInt()} brawl={ConVar.Find(BrawlCvar)?.GetBool()} guardians[{Per("npc_trooper_boss")}] walkers[{Per("npc_boss_tier2")}] barracks[{Per("npc_barrack_boss")}] troopers[{Per("npc_trooper")}]");
+                    break;
+                }
             case "kits":
                 foreach (var pawn in Players.GetAllPawns())
                     Log($"  kit slot={pawn.Controller?.Slot} hero={pawn.HeroID} lvl={pawn.Level} [{string.Join(", ", KitOf(pawn))}]");

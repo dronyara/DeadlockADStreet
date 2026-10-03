@@ -9,6 +9,9 @@ public sealed partial class DraftPlugin
     // (rounds, buy phases with the item draft). It can be flipped on a live map: citadel_street_brawl_reset
     // rebuilds the match under the new mode, so heroes and teams survive and no map reload is needed.
     const string BrawlCvar = "citadel_gamemode_streetbrawl_enabled";
+    // Street Brawl narrows the match to one lane through this convar and never widens it again - not on a mode
+    // switch, not even on a map change. 0 means all lanes.
+    const string ActiveLaneCvar = "citadel_active_lane";
 
     Rules _forcedRules;       // test bridge only
 

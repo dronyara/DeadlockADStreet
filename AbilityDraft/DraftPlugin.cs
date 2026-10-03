@@ -94,6 +94,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         Server.ExecuteCommand("sv_hibernate_when_empty 0");
         Server.ExecuteCommand("citadel_allow_duplicate_heroes 1");
         Server.ExecuteCommand($"{BrawlCvar} 0");          // every map starts as a Standard lobby; the vote decides
+        Server.ExecuteCommand($"{ActiveLaneCvar} 0");
         _phase = Phase.Lobby;
         _kits.Clear();
         _rules = Rules.None;
