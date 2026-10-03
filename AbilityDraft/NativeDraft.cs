@@ -6,8 +6,8 @@ namespace AbilityDraft;
 // The ability draft on the stock Street Brawl "item draft" screen - nothing is installed on the client.
 // During the buy phase the engine deals every hero three item options and networks them. As soon as they are
 // dealt, the item ids are overwritten with ability ids, so the stock screen draws ability cards. A pick comes
-// in as an ability key (1-3): the ability goes into the slot and the engine reroll function deals the next
-// three. After the fourth pick the patching stops and the same reroll hands the player their real item options.
+// in as a digit typed in chat (1-3): the ability goes into the slot and the engine reroll function deals the
+// next three. After the fourth pick the patching stops and the same reroll hands the player their real item options.
 public sealed partial class DraftPlugin
 {
     const int RerollsPerPick = 3;
@@ -140,10 +140,10 @@ public sealed partial class DraftPlugin
                 ns.SavedRoundsTotal = Marshal.ReadInt32(state, RoundsTotalOffset);
                 if (!ns.Bot && Players.FromSlot(ns.Slot) is { } c)
                 {
-                    c.HudAnnounce(ns.Ru ? "ВЫБОР СПОСОБНОСТЕЙ" : "ABILITY DRAFT", ns.Ru ? "Клавиши 1-3 — взять. Не кликай по карточкам!" : "Keys 1-3 pick. Do not click the cards!");
+                    c.HudAnnounce(ns.Ru ? "ВЫБОР СПОСОБНОСТЕЙ" : "ABILITY DRAFT", ns.Ru ? "Напиши в чат 1, 2 или 3. Не кликай по карточкам!" : "Type 1, 2 or 3 in chat. Do not click the cards!");
                     Chat.PrintToChat(c, ns.Ru
-                        ? "[Draft] Выбор способностей: клавиши 1-3 берут карточку, «Прокрутить» меняет все три. НЕ кликай по карточке способности мышью — игра вылетит."
-                        : "[Draft] Ability draft: keys 1-3 take a card, the Reroll button deals new ones. Do NOT click an ability card - the game will crash.");
+                        ? "[Draft] Выбор способностей: напиши в чат 1, 2 или 3 (слева, сверху, справа). «Прокрутить» меняет все три. НЕ кликай по карточке мышью — игра вылетит."
+                        : "[Draft] Ability draft: type 1, 2 or 3 in chat (left, top, right). The Reroll button deals new cards. Do NOT click a card - the game will crash.");
                 }
             }
             pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, RerollsPerPick);
@@ -210,6 +210,30 @@ public sealed partial class DraftPlugin
         // In a borrowed phase there are no items to go back to: the finished player just gets the screen closed.
         if (ns.Round >= Slots && _nativeThenStandard) CloseDraft(pawn);
         else Native.Reroll(pawn);
+    }
+
+    /// <summary>
+    /// A bare "1", "2" or "3" typed in chat is a choice. This is the dependable input on the stock draft screen,
+    /// which keeps the keyboard for itself: ability keys only get through when the screen happens to lose focus.
+    /// The same digits answer the rules vote and the text-menu draft. The message itself is not shown to anyone.
+    /// </summary>
+    public override HookResult OnChatMessage(ChatMessage message)
+    {
+        var text = message.ChatText.Trim();
+        if (text.Length != 1 || text[0] < '1' || text[0] > '3') return HookResult.Continue;
+        int choice = text[0] - '1', slot = message.SenderSlot;
+
+        if (_native.TryGetValue(slot, out var ns) && !ns.Bot && ns.Round < Slots && ns.Offer[0] != null)
+        {
+            if (Players.FromSlot(slot)?.GetHeroPawn() is { } pawn) PickNative(ns, pawn, choice);
+            return HookResult.Stop;
+        }
+        if (_seats.TryGetValue(slot, out var s) && !s.Bot)
+        {
+            if (_phase == Phase.Voting && choice < 2) { CastVote(slot, choice == 0 ? Rules.Standard : Rules.StreetBrawl); return HookResult.Stop; }
+            if (_phase == Phase.Drafting && Pick(s, choice)) return HookResult.Stop;
+        }
+        return HookResult.Continue;
     }
 
     /// <summary>Ability keys 1-3 on the stock draft screen. Returns true when the input belonged to the native draft.</summary>
