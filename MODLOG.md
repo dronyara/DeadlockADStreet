@@ -53,6 +53,28 @@ API это даёт (`CCitadelPlayerPawn.AddAbility/RemoveAbility`, `OnGameState
    процесс молча выходит, `console.log` не создаётся. Чинится обновлением Deadworks (v0.5.3 от 03.10.2026 — «updated signatures + offsets»).
    Диагностика: запустить `deadworks.exe` с `-RedirectStandardOutput`.
 
+2. `static readonly` поле в одном файле partial-класса, зависящее от поля из другого файла (`AbilityPool.All` в `.g.cs`), —
+   порядок инициализации не определён, плагин падал на загрузке (`type initializer threw`). Решение: `Lazy<>`.
+3. `OnGameStateChanging` зовётся каждый тик, пока переход запрещён, — не логировать внутри.
+4. `GameRules.GameMode` / `MatchMode` на сервере без лобби всегда читаются как `Invalid` (и в Standard, и в Street Brawl) — не оракул.
+   Оракул режима — строки `Street Brawl Round N pre rolls` / `hero_x beginning draft` в `console.log`.
+5. Фейк-клиенты (`Server.CreateFakeClient`) заходят с командой 0 и без героя: нужно `ChangeTeam` + `SelectHero`; при `changelevel` они пропадают.
+   Третьему боту `SelectHero(Lash)` дал pawn с `HeroID=0` без способностей — такие места в драфт не берём.
+6. `ExecuteAbilityBySlot` возвращает 4, пока способность не разблокирована (уровень 1); после `UpgradeBits=1` — 0.
+
+## Проверено на сервере (боты, 2026-10-04, Deadworks v0.5.3, билд 6745)
+- Deadworks обновлён до v0.5.3 (копия v0.5.1 в `data/deadworks-v0.5.1-backup`, gitignored).
+- Лобби удерживается в `PreGameWait` (вето на `GameInProgress`), после голосования `ChangeGameState(GameInProgress)`.
+- Драфт 4 ботов: 4 раунда, рероллы 2 на карточку (третий отклоняется), ульты только в 4-м раунде, набор применяется
+  (`RemoveAbility` ×4, затем `AddAbility(name, slot)`), держится после старта матча. Чужие способности кастуются (результат 0).
+- **Street Brawl без перезагрузки карты**: `citadel_gamemode_streetbrawl_enabled 1` + `citadel_street_brawl_reset` + `ChangeGameState(GameInProgress)`
+  на живой карте → `Street Brawl Round 1 pre rolls`, драфт предметов; герои, команды и наборы сохраняются.
+  (С перезагрузкой карты тоже работает, но теряются герои и фейк-клиенты.)
+- Standard: тот же путь без cvar.
+
+## Не проверено
+- Настоящим клиентом: панель UI (лаунчер Deadworks), ввод клавишами 1-3 / R, как клиентский HUD переживает живое переключение в Street Brawl,
+  штатный экран выбора героя на сервере без лобби.
+
 ## Следующий шаг
-Обновить Deadworks до v0.5.3 (нужно разрешение пользователя), проверить гипотезу про `citadel_gamemode_streetbrawl_enabled`,
-прогнать драфт на ботах, затем проверка клиентом.
+Проверка клиентом (подключение `connect localhost:27067`), клип.
