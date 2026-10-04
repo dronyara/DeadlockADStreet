@@ -59,6 +59,18 @@ The build copies the plugin into `game/bin/win64/managed/plugins`; `find_sigs.py
 it. If Steam is not in `C:\Program Files (x86)\Steam`, add `-p:DeadlockDir="<Deadlock folder>"` to the build and pass
 the folder to the script. Start the server with `tools\host.ps1` (or `tools\host.ps1 -Lan`).
 
+## Settings
+`game\bin\win64\managed\plugins\AbilityDraft.config.json` is created on the first start and read again at every
+map start:
+```json
+{ "Blacklist": ["Hotel Guest", "ability_frank_revive"] }
+```
+`Blacklist` lists abilities that are never offered. Use the internal name or the English or Russian name; all of
+them are in `AbilityDraft.abilities.txt` next to the config. Names the plugin does not recognise are reported in the
+server log.
+
+No two players get the same ability. A card another player takes while it is on your screen is replaced for free.
+
 ## After a game patch
 Deadworks stops starting until its next release, and the plugin's own signatures may need regenerating.
 [PATCHING.md](PATCHING.md) lists what to check, in order.
@@ -67,8 +79,8 @@ Deadworks stops starting until its next release, and the plugin's own signatures
 - **Clicking an ability card crashes the client.** The stock screen treats every card as an item; an ability has
   no item data, and the client reads past it. Picks go through chat instead.
 - **The header still says "item draft".** That text is in the client's localization and cannot be changed by a server.
-- **The TAB upgrade menu shows the hero's original abilities.** Upgrading the drafted ones works; the menu takes its
-  layout from the hero's data on the client.
+- **The TAB upgrade menu shows the hero's original abilities**, because it takes its layout from the hero's data on
+  the client. In Street Brawl the drafted kit therefore starts fully unlocked.
 - **Standard gives 50 seconds for all four picks**, because the draft borrows Street Brawl's first buy phase.
 - Tested with one player and bots. A full lobby and a complete match have not been tested, and only a handful of the
   152 abilities have been cast on a foreign hero.
