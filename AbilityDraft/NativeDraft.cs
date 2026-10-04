@@ -178,6 +178,16 @@ public sealed partial class DraftPlugin
             Log($"restore {c.PlayerName}: team {c.TeamNum}->{r.Team} hero {pawn?.HeroID.ToString() ?? "none"}->{r.Hero}");
         }
         if (!allBack && Now < _restoreDeadline) return;
+        if (!Players.GetAll().Any(p => !p.IsBot))
+        {
+            // Everybody left during the reload: there is no match to start, the held map simply is the lobby again.
+            Log("RESTORE abandoned: nobody came back, lobby is open");
+            _restore.Clear();
+            _kits.Clear();
+            _rules = Rules.None;
+            _phase = Phase.Lobby;
+            return;
+        }
 
         Log($"RESTORE done (all back={allBack}), starting Standard match");
         _restore.Clear();
