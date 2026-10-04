@@ -174,7 +174,23 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
             case Phase.Voting: TickVote(); break;
             case Phase.Starting: if (Now >= _phaseEnd) StartMatch(); break;
             case Phase.Restoring: TickRestore(); break;
+            case Phase.Match: TickEmptyMatch(); break;
         }
+    }
+
+    // A match everyone has left is over: the next player to join should find a lobby, not a running game.
+    const float EmptyMatchSeconds = 60f;
+    float _emptySince = -1f;
+
+    void TickEmptyMatch()
+    {
+        if (Players.GetAll().Any(p => !p.IsBot)) { _emptySince = -1f; return; }
+        if (_emptySince < 0) { _emptySince = Now; return; }
+        if (Now - _emptySince < EmptyMatchSeconds) return;
+        _emptySince = -1f;
+        Log("match is empty, reloading the map into a fresh lobby");
+        _phase = Phase.Lobby;
+        Server.ChangeLevel(Server.MapName);
     }
 
     // ---- draft -----------------------------------------------------------------------------------------------
