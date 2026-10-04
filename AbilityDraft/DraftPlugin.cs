@@ -101,6 +101,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         Server.ExecuteCommand("citadel_allow_duplicate_heroes 1");
         Server.ExecuteCommand($"{BrawlCvar} 0");          // every map starts as a Standard lobby; the vote decides
         Server.ExecuteCommand($"{ActiveLaneCvar} 0");
+        LoadConfig();
         if (_phase == Phase.Restoring && _restore.Count > 0)
         {
             // The reload into Standard after a draft on the Street Brawl screen: hold the lobby until everyone is back.
@@ -199,6 +200,8 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         }
         if (_seats.Count == 0) throw new CommandException("Nobody has a hero yet.");
         _native.Clear();
+        _taken.Clear();
+        LoadConfig();
         Log($"DRAFT START seats={string.Join(",", _seats.Keys)}");
         StartVote();
     }
@@ -242,7 +245,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     AbilityDef? Roll(Seat s)
     {
         bool ult = s.Round == Slots - 1;
-        var pool = AbilityPool.All.Where(a => a.Ult == ult && !s.Kit.Contains(a.Name) && !s.Seen.Contains(a.Name)).ToList();
+        var pool = Pool.Where(a => a.Ult == ult && !_taken.Contains(a.Name) && !s.Kit.Contains(a.Name) && !s.Seen.Contains(a.Name)).ToList();
         if (pool.Count == 0) return null;
         var pick = pool[Random.Shared.Next(pool.Count)];
         s.Seen.Add(pick.Name);
@@ -265,7 +268,15 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     {
         if (_phase != Phase.Drafting || s.Done || i < 0 || i >= Offers || s.Offer[i] == null) return false;
         var a = s.Offer[i]!;
+        if (_taken.Contains(a.Name))
+        {
+            // Somebody took it while it sat on this menu: swap the card for free instead of handing out a duplicate.
+            if (Roll(s) is { } other) s.Offer[i] = other;
+            ShowOffer(s);
+            return false;
+        }
         s.Kit[s.Round] = a.Name;
+        _taken.Add(a.Name);
         Log($"slot {s.Slot} round {s.Round + 1} picked {a.Name} ({a.En}, {a.HeroEn})");
         s.Round++;
         s.NextBotAt = Now + BotThinkSeconds;

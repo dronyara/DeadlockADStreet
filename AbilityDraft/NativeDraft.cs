@@ -55,6 +55,7 @@ public sealed partial class DraftPlugin
         _nativeThenStandard = thenStandard;
         _nativeDeadline = Now + BorrowedDraftSeconds + StartDelaySeconds;
         _native.Clear();
+        _taken.Clear();
         foreach (var s in _seats.Values)
             _native[s.Slot] = new NativeSeat { Slot = s.Slot, Bot = s.Bot, Ru = s.Ru };
         Log($"NATIVE DRAFT armed for slots {string.Join(",", _native.Keys)} (rounds offsets {RoundsLeftOffset}/{RoundsTotalOffset})");
@@ -100,8 +101,9 @@ public sealed partial class DraftPlugin
             for (; ns.Round < Slots; ns.Round++)
             {
                 bool ult = ns.Round == Slots - 1;
-                var pool = AbilityPool.All.Where(a => a.Ult == ult && !ns.Kit.Contains(a.Name)).ToList();
+                var pool = Candidates(ns, ult, avoidSeen: false, avoidOffered: false);
                 var pick = pool[Random.Shared.Next(pool.Count)];
+                _taken.Add(pick.Name);
                 ReplaceAbility(pawn, ns.Round, pick.Name);
                 ns.Kit[ns.Round] = pick.Name;
             }
@@ -200,12 +202,12 @@ public sealed partial class DraftPlugin
         Marshal.WriteInt32(state, RoundsLeftOffset, Slots - ns.Round);
 
         bool ult = ns.Round == Slots - 1;
-        var pool = AbilityPool.All.Where(a => a.Ult == ult && !ns.Kit.Contains(a.Name) && !ns.Seen.Contains(a.Name)).ToList();
-        if (pool.Count < Offers)
-        {
-            ns.Seen.Clear();
-            pool = AbilityPool.All.Where(a => a.Ult == ult && !ns.Kit.Contains(a.Name)).ToList();
-        }
+        Array.Clear(ns.Offer);                  // the cards being replaced no longer count as "on this player's screen"
+        // Best case: cards nobody holds, nobody else is looking at, and this player has not seen this round.
+        // Each fallback gives up one of those wishes; the last ones only matter when the pool is nearly used up.
+        var pool = Candidates(ns, ult, avoidSeen: true, avoidOffered: true);
+        if (pool.Count < Offers) { ns.Seen.Clear(); pool = Candidates(ns, ult, avoidSeen: false, avoidOffered: true); }
+        if (pool.Count < Offers) pool = Candidates(ns, ult, avoidSeen: false, avoidOffered: false);
         for (int i = 0; i < Offers; i++)
         {
             var pick = pool[Random.Shared.Next(pool.Count)];
@@ -227,12 +229,23 @@ public sealed partial class DraftPlugin
     void PickNative(NativeSeat ns, CCitadelPlayerPawn pawn, int i)
     {
         if (ns.Offer[i] is not { } pick) return;
+        if (_taken.Contains(pick.Name) && FreeAbilitiesLeft(ns, pick.Ult))
+        {
+            // Somebody got there first: no pick, new cards, and the reroll is on the house.
+            if (!ns.Bot && Players.FromSlot(ns.Slot) is { } late)
+                Chat.PrintToChat(late, ns.Ru ? $"[Draft] «{pick.Ru}» уже забрали — вот новые карточки, прокрутка бесплатная." : $"[Draft] {pick.En} is already taken - here are new cards, this reroll is free.");
+            Log($"native slot {ns.Slot} round {ns.Round + 1}: {pick.Name} is already taken, free reroll");
+            FreeReroll(pawn);
+            return;
+        }
         bool ok = ReplaceAbility(pawn, ns.Round, pick.Name);
         ns.Kit[ns.Round] = pick.Name;
+        _taken.Add(pick.Name);
         Log($"native slot {ns.Slot} round {ns.Round + 1}: took {pick.Name} ({pick.En}, {pick.HeroEn}){(ok ? "" : " - AddAbility FAILED")}");
         ns.Round++;
         ns.RoundOpen = false;
         Array.Clear(ns.Offer);
+        ReplaceTakenCards(ns, pick);
 
         var state = DraftState.GetAddress(pawn.Handle);
         if (ns.Round >= Slots)
@@ -250,6 +263,14 @@ public sealed partial class DraftPlugin
             if (!ns.Bot && Players.FromSlot(ns.Slot) is { } c)
                 Chat.PrintToChat(c, "[Draft] " + (ns.Ru ? "Твой набор: " : "Your kit: ") + string.Join(", ", ns.Kit.Select(k => AbilityPool.Find(k!)?.Title(ns.Ru) ?? k))
                     + (!_nativeThenStandard ? "" : ns.Ru ? ". Ждём остальных игроков." : ". Waiting for the other players."));
+            if (!_nativeThenStandard)
+            {
+                // Street Brawl hands out unlocks through the TAB menu, which still lists the hero's own abilities
+                // and so cannot unlock drafted ones. The whole kit starts unlocked instead.
+                for (int slot = 0; slot < Slots; slot++)
+                    if (pawn.GetAbilityBySlot((EAbilitySlot)slot) is CCitadelBaseAbility drafted && (drafted.UpgradeBits & 1) == 0)
+                        drafted.UpgradeBits |= 1;
+            }
             Log($"native slot {ns.Slot} finished: [{string.Join(", ", ns.Kit)}]");
         }
         else
@@ -261,6 +282,47 @@ public sealed partial class DraftPlugin
         // In a borrowed phase there are no items to go back to: the finished player just gets the screen closed.
         if (ns.Round >= Slots && _nativeThenStandard) CloseDraft(pawn);
         else Native.Reroll(pawn);
+    }
+
+    readonly HashSet<string> _taken = new();        // abilities somebody has drafted in the current draft
+
+    /// <summary>What may be dealt to this seat for a normal or an ultimate slot.</summary>
+    List<AbilityDef> Candidates(NativeSeat ns, bool ult, bool avoidSeen, bool avoidOffered)
+    {
+        var offered = avoidOffered
+            ? _native.Values.Where(o => o != ns).SelectMany(o => o.Offer).Where(a => a != null).Select(a => a!.Name).ToHashSet()
+            : null;
+        var list = Pool.Where(a => a.Ult == ult && !_taken.Contains(a.Name) && !ns.Kit.Contains(a.Name)
+            && !(avoidSeen && ns.Seen.Contains(a.Name)) && !(offered != null && offered.Contains(a.Name))).ToList();
+        if (list.Count >= Offers || avoidSeen || avoidOffered) return list;
+        // Nothing unique is left (a tiny pool after the blacklist, or a very full server): repeats beat an empty screen.
+        list = Pool.Where(a => a.Ult == ult && !ns.Kit.Contains(a.Name)).ToList();
+        if (list.Count < Offers) list = AbilityPool.All.Where(a => a.Ult == ult && !ns.Kit.Contains(a.Name)).ToList();
+        return list;
+    }
+
+    bool FreeAbilitiesLeft(NativeSeat ns, bool ult) =>
+        Pool.Any(a => a.Ult == ult && !_taken.Contains(a.Name) && !ns.Kit.Contains(a.Name));
+
+    /// <summary>Deals the hero new cards without spending one of their own rerolls.</summary>
+    static void FreeReroll(CCitadelPlayerPawn pawn)
+    {
+        pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, pawn.GetCurrency(ECurrencyType.EItemDraftRerolls) + 1);
+        Native.Reroll(pawn);
+    }
+
+    /// <summary>Everyone else who has the just-drafted ability on screen gets new cards, free of charge.</summary>
+    void ReplaceTakenCards(NativeSeat picker, AbilityDef taken)
+    {
+        foreach (var other in _native.Values)
+        {
+            if (other == picker || other.Round >= Slots || !other.Offer.Any(a => a?.Name == taken.Name)) continue;
+            if (Players.FromSlot(other.Slot)?.GetHeroPawn() is not { } pawn) continue;
+            if (!other.Bot && Players.FromSlot(other.Slot) is { } c)
+                Chat.PrintToChat(c, other.Ru ? $"[Draft] «{taken.Ru}» только что забрали — карточки заменены бесплатно." : $"[Draft] {taken.En} was just taken - your cards were replaced for free.");
+            Log($"native slot {other.Slot}: {taken.Name} was taken by slot {picker.Slot}, free reroll");
+            FreeReroll(pawn);
+        }
     }
 
     /// <summary>
