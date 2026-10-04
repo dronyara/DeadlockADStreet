@@ -190,6 +190,10 @@ public sealed partial class DraftPlugin
                 foreach (var pawn in Players.GetAllPawns())
                     Log($"  slot={pawn.Controller?.Slot} all=[{string.Join(", ", pawn.AbilityComponent.Abilities.Where(x => x.IsItem || x.IsSignature).Select(x => $"{x.AbilityName}@{x.AbilitySlot}"))}]");
                 break;
+            case "stub":
+                _stubItems = a.Length == 0 || a[0] != "0";
+                Log($"stub items on ability cards = {_stubItems}");
+                break;
             case "markdrafted":
                 _markDrafted = a.Length == 0 || a[0] != "0";
                 Log($"drafted flag on ability cards = {_markDrafted}");
