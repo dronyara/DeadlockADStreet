@@ -102,8 +102,7 @@ public sealed partial class DraftPlugin
                 bool ult = ns.Round == Slots - 1;
                 var pool = AbilityPool.All.Where(a => a.Ult == ult && !ns.Kit.Contains(a.Name)).ToList();
                 var pick = pool[Random.Shared.Next(pool.Count)];
-                if (pawn.GetAbilityBySlot((EAbilitySlot)ns.Round) is CCitadelBaseAbility old) pawn.RemoveAbility(old);
-                pawn.AddAbility(pick.Name, (ushort)ns.Round);
+                ReplaceAbility(pawn, ns.Round, pick.Name);
                 ns.Kit[ns.Round] = pick.Name;
             }
             _kits[ns.Slot] = ns.Kit.Select(k => k!).ToArray();
@@ -228,8 +227,7 @@ public sealed partial class DraftPlugin
     void PickNative(NativeSeat ns, CCitadelPlayerPawn pawn, int i)
     {
         if (ns.Offer[i] is not { } pick) return;
-        if (pawn.GetAbilityBySlot((EAbilitySlot)ns.Round) is CCitadelBaseAbility old) pawn.RemoveAbility(old);
-        bool ok = pawn.AddAbility(pick.Name, (ushort)ns.Round) != null;
+        bool ok = ReplaceAbility(pawn, ns.Round, pick.Name);
         ns.Kit[ns.Round] = pick.Name;
         Log($"native slot {ns.Slot} round {ns.Round + 1}: took {pick.Name} ({pick.En}, {pick.HeroEn}){(ok ? "" : " - AddAbility FAILED")}");
         ns.Round++;

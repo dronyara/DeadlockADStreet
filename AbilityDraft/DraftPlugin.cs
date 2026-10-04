@@ -334,11 +334,15 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
             var before = KitOf(pawn);
             if (before.SequenceEqual(kit)) return;
             // Clear all four slots first: a drafted ability may already sit in another slot of this hero.
+            var bits = new int[Slots];
             for (int i = 0; i < Slots; i++)
-                if (pawn.GetAbilityBySlot((EAbilitySlot)i) is CCitadelBaseAbility old && !pawn.RemoveAbility(old))
-                    Log($"  could not remove {old.AbilityName} from slot {i + 1}");
+            {
+                if (pawn.GetAbilityBySlot((EAbilitySlot)i) is not CCitadelBaseAbility old) continue;
+                bits[i] = old.UpgradeBits;
+                if (!pawn.RemoveAbility(old)) Log($"  could not remove {old.AbilityName} from slot {i + 1}");
+            }
             for (int i = 0; i < Slots; i++)
-                if (pawn.AddAbility(kit[i], (ushort)i) == null)
+                if (!PutAbility(pawn, i, kit[i], bits[i]))
                     Log($"  could not add {kit[i]} to slot {i + 1}");
             Log($"kit applied slot={pawn.Controller?.Slot} hero={pawn.HeroID}: [{string.Join(", ", before)}] -> [{string.Join(", ", KitOf(pawn))}]");
         }
@@ -346,6 +350,31 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         {
             Log($"ApplyKit failed: {ex}");
         }
+    }
+
+    /// <summary>
+    /// Adds an ability to a slot and gives it the unlock and upgrade state the slot had. A fresh ability arrives
+    /// locked, and the ability points already spent on the slot are gone with the old one - in Street Brawl, where
+    /// points are handed out and spent before the draft is over, that left drafted abilities locked for good.
+    /// </summary>
+    static bool PutAbility(CCitadelPlayerPawn pawn, int slot, string name, int upgradeBits)
+    {
+        if (pawn.AddAbility(name, (ushort)slot) == null) return false;
+        if (upgradeBits != 0 && pawn.GetAbilityBySlot((EAbilitySlot)slot) is CCitadelBaseAbility fresh && fresh.UpgradeBits != upgradeBits)
+            fresh.UpgradeBits = upgradeBits;
+        return true;
+    }
+
+    /// <summary>Swaps the ability in one slot, keeping the slot's unlock and upgrade state.</summary>
+    static bool ReplaceAbility(CCitadelPlayerPawn pawn, int slot, string name)
+    {
+        int bits = 0;
+        if (pawn.GetAbilityBySlot((EAbilitySlot)slot) is CCitadelBaseAbility old)
+        {
+            bits = old.UpgradeBits;
+            pawn.RemoveAbility(old);
+        }
+        return PutAbility(pawn, slot, name, bits);
     }
 
     static string[] KitOf(CCitadelPlayerPawn pawn) =>
