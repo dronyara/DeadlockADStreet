@@ -18,7 +18,7 @@ The game client is not modified. Everything runs on a server you host; players j
 4. The match starts and the **stock Street Brawl draft screen opens with ability cards**. Four picks, the last one
    is the ultimate, with three rerolls per pick on the stock Reroll button.
    **Take a card by typing its number in chat: Enter → `1`, `2` or `3` → Enter (left, top, right). The message is not
-   shown to anyone. Do not click an ability card with the mouse — the game crashes.**
+   shown to anyone. Clicking an ability card with the mouse does nothing.**
 5. Street Brawl: after the fourth ability the same screen goes on to the usual items, and the match continues as
    Street Brawl.
    Standard: once everyone has four abilities (or after 50 seconds — the rest is filled in at random) the map reloads
@@ -76,8 +76,9 @@ Deadworks stops starting until its next release, and the plugin's own signatures
 [PATCHING.md](PATCHING.md) lists what to check, in order.
 
 ## Known limits
-- **Clicking an ability card crashes the client.** The stock screen treats every card as an item; an ability has
-  no item data, and the client reads past it. Picks go through chat instead.
+- **Ability cards cannot be clicked.** The stock screen treats every card as an item, and buying an "item" that is
+  really an ability crashes the client, so the plugin marks the cards as already taken: a click does nothing and
+  picks go through chat. After a pick the old cards stay until the wheel has spun to the new ones.
 - **The header still says "item draft".** That text is in the client's localization and cannot be changed by a server.
 - **The TAB upgrade menu shows the hero's original abilities**, because it takes its layout from the hero's data on
   the client. In Street Brawl the drafted kit therefore starts fully unlocked.
