@@ -69,12 +69,14 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     {
         Log($"=== Ability Draft loaded (reload={isReload}) pool={AbilityPool.All.Length} abilities ===");
         Log(Native.Load(Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? ".", "managed", "plugins", "AbilityDraft.signatures.json")));
+        Server.AddEngineLogListener(OnEngineLog);
         if (isReload) BeginMap();
     }
 
     public override void OnUnload()
     {
         _loop?.Cancel();
+        Server.RemoveEngineLogListener(OnEngineLog);
         foreach (var s in _seats.Values) HidePanel(s);
         if (_panelWired) UI.ClientResync -= OnClientResync;
     }
@@ -85,7 +87,11 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         foreach (var hero in AbilityPool.HeroNames) Precache.AddHero(hero);
     }
 
-    public override void OnStartupServer() => BeginMap();
+    public override void OnStartupServer()
+    {
+        BeginMap();
+        EnableSteamConnect();
+    }
 
     void BeginMap()
     {
@@ -133,6 +139,8 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
             Chat.PrintToChat(c, args.Slot == Host()
                 ? "[Draft] Ты хост. Когда все выберут героев, напиши /draft. | You are the host: type /draft when everyone has a hero."
                 : "[Draft] Выбери героя и жди, пока хост начнёт драфт. | Pick a hero and wait for the host to start the draft.");
+        if (_phase == Phase.Lobby && args.Slot == Host() && SteamConnectReady)
+            Chat.PrintToChat(c, $"[Draft] Друзья заходят без проброса портов: connect {_steamConnect} | Friends join with: connect {_steamConnect}");
     }
 
     public override void OnClientDisconnect(ClientDisconnectedEvent args)

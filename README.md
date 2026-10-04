@@ -38,8 +38,13 @@ Windows only: Deadworks has no Linux build because Valve ships no Linux server f
 4. The zip from this repository's [Releases](../../releases), unpacked into the same Deadlock folder.
 5. Run `game\bin\win64\start-abilitydraft.bat`.
 
-Forward UDP/TCP 27067 on the router for players outside your network. The host joins the same way:
-console (`` ` ``) → `connect localhost:27067`.
+The host joins with console (`` ` ``) → `connect localhost:27067`.
+
+**Friends outside your network do not need port forwarding.** On start the plugin switches on joining through Steam
+and prints the command for it in the server log (`STEAM CONNECT: connect [A:1:…]`); the host also gets it in chat on
+joining, and `/id` shows it again. Friends paste that whole line, brackets included, into their console. The id
+changes every time the server starts. Joining by address works too: forward UDP/TCP 27067 on the router and use
+`connect <ip>:27067`. Start the server with `-ad_nosteamconnect` to keep Steam joining off.
 
 Running the server and the game on one machine takes a lot of memory. It works on 8 GB, but a map load takes about a
 minute, and so does the reload into Standard.
