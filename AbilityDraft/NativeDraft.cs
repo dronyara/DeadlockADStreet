@@ -210,10 +210,10 @@ public sealed partial class DraftPlugin
                 ns.SavedRoundsTotal = Marshal.ReadInt32(state, RoundsTotalOffset);
                 if (!ns.Bot && Players.FromSlot(ns.Slot) is { } c)
                 {
-                    c.HudAnnounce(ns.Ru ? "ВЫБОР СПОСОБНОСТЕЙ" : "ABILITY DRAFT", ns.Ru ? "Напиши в чат 1, 2 или 3. Не кликай по карточкам!" : "Type 1, 2 or 3 in chat. Do not click the cards!");
+                    c.HudAnnounce(ns.Ru ? "ВЫБОР СПОСОБНОСТЕЙ" : "ABILITY DRAFT", ns.Ru ? "Напиши в чат 1, 2 или 3 — клик по карточке не работает" : "Type 1, 2 or 3 in chat - clicking a card does nothing");
                     Chat.PrintToChat(c, ns.Ru
-                        ? "[Draft] Выбор способностей: напиши в чат 1, 2 или 3 (слева, сверху, справа). «Прокрутить» меняет все три. НЕ кликай по карточке мышью — игра вылетит."
-                        : "[Draft] Ability draft: type 1, 2 or 3 in chat (left, top, right). The Reroll button deals new cards. Do NOT click a card - the game will crash.");
+                        ? "[Draft] Выбор способностей: напиши в чат 1, 2 или 3 (слева, сверху, справа). «Прокрутить» меняет все три. Клик мышью по карточке не работает."
+                        : "[Draft] Ability draft: type 1, 2 or 3 in chat (left, top, right). The Reroll button deals new cards. Clicking a card does nothing.");
                 }
             }
             pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, RerollsPerPick);

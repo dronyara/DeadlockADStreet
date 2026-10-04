@@ -23,6 +23,7 @@ rem Ability Draft server. Players join from the Deadlock console:  connect <your
 rem Forward UDP/TCP 27067 on the router for players outside your network.
 cd /d "%~dp0"
 if not defined DOTNET_ROOT if exist "%LOCALAPPDATA%\Microsoft\dotnet\dotnet.exe" set "DOTNET_ROOT=%LOCALAPPDATA%\Microsoft\dotnet"
+if not defined DOTNET_ROOT if not exist "%ProgramFiles%\dotnet\dotnet.exe" echo WARNING: .NET 10 was not found - the plugin will not load. Install it from https://dotnet.microsoft.com/download/dotnet/10.0
 deadworks.exe -dedicated -console -condebug -insecure -allow_no_lobby_connect ^
   +hostport 27067 +sv_hibernate_when_empty 0 ^
   +net_limit_sv_message_process_time_ms_drop_burst 60000 +net_limit_sv_message_process_time_ms_drop_rate 60000 ^
@@ -47,15 +48,24 @@ INSTALL (the host only)
 5. Run game\\bin\\win64\\start-abilitydraft.bat
 
 PLAY
-- Everyone opens the Deadlock console and types:  connect <host ip>:27067   (the host: connect localhost:27067)
+- The host joins from the Deadlock console:  connect localhost:27067
+- Friends need no port forwarding: on start the server prints "STEAM CONNECT: connect [A:1:...]" in its window
+  (the host also sees it in chat, and /id shows it again). Friends paste that whole line into their console.
+  The id changes every time the server starts. Joining by address works too: connect <host ip>:27067
+  (forward UDP/TCP 27067 on the router).
 - Pick heroes. The host (first player in) types /draft in chat.
 - Vote for the rules by typing 1 (Standard) or 2 (Street Brawl) in chat.
 - The match starts and the draft screen opens with ability cards. Take a card by typing 1, 2 or 3 in chat
   (left, top, right). Four picks, the last one is the ultimate; three rerolls per pick with the Reroll button.
-  DO NOT CLICK an ability card with the mouse - the game crashes. Type the number instead.
-- Street Brawl: after the fourth ability the same screen goes on to the usual items.
+  Clicking an ability card does nothing - type the number instead. No two players get the same ability.
+- Street Brawl: after the fourth ability the same screen goes on to the usual items; the kit starts unlocked.
   Standard: the map reloads once everyone is done, and every player gets their team, hero and kit back.
 - /newdraft (host) returns everyone to the lobby.
+
+SETTINGS
+game\\bin\\win64\\managed\\plugins\\AbilityDraft.config.json is created on the first start and read at every map
+start.  "Blacklist": ["Hotel Guest", "ability_frank_revive"]  lists abilities that are never offered; use the
+internal, English or Russian name from AbilityDraft.abilities.txt in the same folder.
 
 AFTER A GAME PATCH
 - Deadworks stops starting until its next release: update Deadworks.
