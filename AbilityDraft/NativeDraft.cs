@@ -14,8 +14,13 @@ public sealed partial class DraftPlugin
 
     // ItemDraftRoundState_t / ItemDraftOption_t layout (see PATCHING.md, checked with the "draftdump" bridge command).
     const int StateOptionCount = 8, StateOptionData = 16, StateId = 112;
-    const int OptionSize = 248, OptionItemId = 96, OptionUpgradeBits = 100, OptionRare = 241;
+    const int OptionSize = 248, OptionItemId = 96, OptionUpgradeBits = 100, OptionDrafted = 240, OptionRare = 241;
     const uint TokenSeed = 0x31415926;
+
+    // Experiment: an ability card is marked "already drafted" (ItemDraftOption_t.m_bHasBeenDrafted) in the hope that
+    // the client then ignores a mouse click on it instead of building item data for it and crashing.
+    // Bridge command "markdrafted 0|1" switches it at runtime; the next deal (or Reroll) shows the effect.
+    static bool _markDrafted = true;
 
     sealed class NativeSeat
     {
@@ -211,12 +216,13 @@ public sealed partial class DraftPlugin
             ns.Written[i] = MurmurHash2.HashLowerCase(pick.Name, TokenSeed);
             Marshal.WriteInt32(data, i * OptionSize + OptionItemId, (int)ns.Written[i]);
             Marshal.WriteByte(data, i * OptionSize + OptionRare, 0);
+            Marshal.WriteByte(data, i * OptionSize + OptionDrafted, (byte)(_markDrafted ? 1 : 0));
             // Bit 1 of the upgrade bits is the "enhanced" badge the dealt item may have carried.
             Marshal.WriteByte(data, i * OptionSize + OptionUpgradeBits, (byte)(Marshal.ReadByte(data, i * OptionSize + OptionUpgradeBits) & ~2));
         }
         ns.NextBotAt = Now + BotThinkSeconds;
         (ns.Prev1, ns.Prev2, ns.Prev3) = (true, true, true);      // a key still held from the last pick does not count
-        Log($"native slot {ns.Slot} round {ns.Round + 1}: {string.Join(", ", ns.Offer.Select(a => a!.Name))} (rerolls {pawn.GetCurrency(ECurrencyType.EItemDraftRerolls)})");
+        Log($"native slot {ns.Slot} round {ns.Round + 1}: {string.Join(", ", ns.Offer.Select(a => a!.Name))} (rerolls {pawn.GetCurrency(ECurrencyType.EItemDraftRerolls)}, drafted flag {(_markDrafted ? 1 : 0)})");
     }
 
     void PickNative(NativeSeat ns, CCitadelPlayerPawn pawn, int i)
@@ -235,6 +241,11 @@ public sealed partial class DraftPlugin
         {
             // Hand the stock item draft back exactly as the engine left it.
             _kits[ns.Slot] = ns.Kit.Select(k => k!).ToArray();
+            // The real items dealt next must be clickable: do not leave the experimental flag on the cards.
+            var cards = Marshal.ReadIntPtr(state, StateOptionData);
+            int cardCount = cards == IntPtr.Zero ? 0 : Math.Min(Offers, Marshal.ReadInt32(state, StateOptionCount));
+            for (int card = 0; card < cardCount; card++)
+                Marshal.WriteByte(cards, card * OptionSize + OptionDrafted, 0);
             Marshal.WriteInt32(state, RoundsTotalOffset, ns.SavedRoundsTotal);
             Marshal.WriteInt32(state, RoundsLeftOffset, ns.SavedRoundsLeft);
             pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, Math.Max(0, ns.SavedRerolls) + 1);
