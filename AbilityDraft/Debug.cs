@@ -190,6 +190,10 @@ public sealed partial class DraftPlugin
                 foreach (var pawn in Players.GetAllPawns())
                     Log($"  slot={pawn.Controller?.Slot} all=[{string.Join(", ", pawn.AbilityComponent.Abilities.Where(x => x.IsItem || x.IsSignature).Select(x => $"{x.AbilityName}@{x.AbilitySlot}"))}]");
                 break;
+            case "markdrafted":
+                _markDrafted = a.Length == 0 || a[0] != "0";
+                Log($"drafted flag on ability cards = {_markDrafted}");
+                break;
             case "native":
                 foreach (var ns in _native.Values)
                     Log($"  native slot={ns.Slot} bot={ns.Bot} round={ns.Round} kit=[{string.Join(", ", ns.Kit)}] offer=[{string.Join(", ", ns.Offer.Select(o => o?.Name))}]");
