@@ -22,6 +22,13 @@ public sealed partial class DraftPlugin
     // Bridge command "markdrafted 0|1" switches it at runtime; the next deal (or Reroll) shows the effect.
     static bool _markDrafted = true;
 
+    // Experiment "stub items": the card's item is a real one, so clicking it is safe and the client sends an
+    // ordinary "buyitem <stub>", which the plugin answers with the ability instead of the item. The ability itself
+    // rides in the card's first bonus slot in the hope that the stock screen draws it. Bridge: "stub 0|1".
+    static bool _stubItems;
+    static readonly string[] StubItems = ["upgrade_healbane", "upgrade_suppressor", "upgrade_sprint_booster"];
+    const int OptionBonus1Id = 160, OptionBonus1Bits = 164, OptionBonus1Level = 168;
+
     sealed class NativeSeat
     {
         public int Slot;
@@ -132,6 +139,7 @@ public sealed partial class DraftPlugin
         Server.ExecuteCommand($"{BrawlCvar} 0");
         Server.ExecuteCommand($"{ActiveLaneCvar} 0");
         _phase = Phase.Restoring;
+        _restoreMapLoaded = false;
         Server.ChangeLevel(Server.MapName);
     }
 
@@ -144,10 +152,14 @@ public sealed partial class DraftPlugin
     const float RestoreSeconds = 150f;      // slow machines need about a minute just to load the map
     readonly Dictionary<ulong, Restore> _restore = new();
     float _restoreDeadline;
+    // The level change is queued, not instant: until the new map is up the old one still has every player in place,
+    // which must not be mistaken for "everyone is back".
+    bool _restoreMapLoaded;
 
     /// <summary>Puts every returning player back on their team and hero with their kit, then starts the match.</summary>
     void TickRestore()
     {
+        if (!_restoreMapLoaded) return;
         bool allBack = true;
         foreach (var (steamId, r) in _restore)
         {
@@ -214,10 +226,17 @@ public sealed partial class DraftPlugin
             pool.Remove(pick);
             ns.Seen.Add(pick.Name);
             ns.Offer[i] = pick;
-            ns.Written[i] = MurmurHash2.HashLowerCase(pick.Name, TokenSeed);
+            uint ability = MurmurHash2.HashLowerCase(pick.Name, TokenSeed);
+            ns.Written[i] = _stubItems ? MurmurHash2.HashLowerCase(StubItems[i], TokenSeed) : ability;
             Marshal.WriteInt32(data, i * OptionSize + OptionItemId, (int)ns.Written[i]);
             Marshal.WriteByte(data, i * OptionSize + OptionRare, 0);
-            Marshal.WriteByte(data, i * OptionSize + OptionDrafted, (byte)(_markDrafted ? 1 : 0));
+            if (_stubItems)
+            {
+                Marshal.WriteInt32(data, i * OptionSize + OptionBonus1Id, (int)ability);
+                Marshal.WriteInt32(data, i * OptionSize + OptionBonus1Bits, 1);
+                Marshal.WriteInt32(data, i * OptionSize + OptionBonus1Level, 1);
+            }
+            Marshal.WriteByte(data, i * OptionSize + OptionDrafted, (byte)(_markDrafted && !_stubItems ? 1 : 0));
             // Bit 1 of the upgrade bits is the "enhanced" badge the dealt item may have carried.
             Marshal.WriteByte(data, i * OptionSize + OptionUpgradeBits, (byte)(Marshal.ReadByte(data, i * OptionSize + OptionUpgradeBits) & ~2));
         }
@@ -347,6 +366,18 @@ public sealed partial class DraftPlugin
             if (_phase == Phase.Drafting && Pick(s, choice)) return HookResult.Stop;
         }
         return HookResult.Continue;
+    }
+
+    /// <summary>In stub mode a click on a card is the client buying that card's stub item. Returns true when it was one.</summary>
+    bool NativeBuyClick(ClientConCommandEvent args)
+    {
+        if (!_stubItems || args.Command != "buyitem" || args.Controller is not { } c) return false;
+        if (!_native.TryGetValue(c.Slot, out var ns) || ns.Bot || ns.Round >= Slots || ns.Offer[0] == null) return false;
+        int card = Array.FindIndex(StubItems, name => args.Args.Contains(name, StringComparer.OrdinalIgnoreCase));
+        if (card < 0) return false;
+        Log($"native slot {ns.Slot} clicked card {card + 1} ({StubItems[card]})");
+        if (c.GetHeroPawn() is { } pawn) PickNative(ns, pawn, card);
+        return true;
     }
 
     /// <summary>Ability keys 1-3 on the stock draft screen. Returns true when the input belonged to the native draft.</summary>

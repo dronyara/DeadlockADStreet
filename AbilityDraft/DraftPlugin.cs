@@ -106,6 +106,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         {
             // The reload into Standard after a draft on the Street Brawl screen: hold the lobby until everyone is back.
             _restoreDeadline = Now + RestoreSeconds;
+            _restoreMapLoaded = true;
             _kits.Clear();
             Log($"map reloaded for Standard, waiting for {_restore.Count} players");
         }

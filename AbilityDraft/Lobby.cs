@@ -45,6 +45,7 @@ public sealed partial class DraftPlugin
     public override HookResult OnClientConCommand(ClientConCommandEvent args)
     {
         if (TraceClientCommands) Log($"clientcmd slot={args.Controller?.Slot} {args.Command} [{string.Join(" ", args.Args)}]");
+        if (NativeBuyClick(args)) return HookResult.Stop;
         return _phase is Phase.Drafting or Phase.Voting or Phase.Starting or Phase.Restoring && args.Command is "selecthero" or "changeteam" or "jointeam"
             ? HookResult.Stop
             : HookResult.Continue;
