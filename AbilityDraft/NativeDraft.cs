@@ -22,17 +22,18 @@ public sealed partial class DraftPlugin
     // Bridge command "markdrafted 0|1" switches it at runtime; the next deal (or Reroll) shows the effect.
     static bool _markDrafted = true;
 
-    // Experiment "stub items": the card's item is a real one, so clicking it is safe and the client sends an
-    // ordinary "buyitem <stub>", which the plugin answers with the ability instead of the item. The ability itself
-    // rides in the card's first bonus slot in the hope that the stock screen draws it. Bridge: "stub 0|1".
-    static bool _stubItems;
-    static readonly string[] StubItems = ["upgrade_healbane", "upgrade_suppressor", "upgrade_sprint_booster"];
-    const int OptionBonus1Id = 160, OptionBonus1Bits = 164, OptionBonus1Level = 168;
+    // Clickable cards need the optional client addon (tools/build_cards.py): it gives every ability a twin, a real
+    // item named ad_<ability> with the ability's icon and name. A click on a twin is safe and makes the client send
+    // an ordinary "buyitem ad_<ability>", which the plugin answers with the ability. The server cannot see who has
+    // the addon, and a client without it would not know the twins, so each player switches them on with /click.
+    const string TwinPrefix = "ad_";
+    readonly HashSet<ulong> _clickers = new();
 
     sealed class NativeSeat
     {
         public int Slot;
         public bool Bot, Ru = true;
+        public bool Click;                                  // deals twin items instead of bare abilities
         public int Round;
         public bool RoundOpen;                              // rerolls already granted for the current round
         public readonly string?[] Kit = new string?[Slots];
@@ -64,7 +65,11 @@ public sealed partial class DraftPlugin
         _native.Clear();
         _taken.Clear();
         foreach (var s in _seats.Values)
-            _native[s.Slot] = new NativeSeat { Slot = s.Slot, Bot = s.Bot, Ru = s.Ru };
+            _native[s.Slot] = new NativeSeat
+            {
+                Slot = s.Slot, Bot = s.Bot, Ru = s.Ru,
+                Click = !s.Bot && Players.FromSlot(s.Slot) is { } c && _clickers.Contains(c.PlayerSteamId),
+            };
         Log($"NATIVE DRAFT armed for slots {string.Join(",", _native.Keys)} (rounds offsets {RoundsLeftOffset}/{RoundsTotalOffset})");
     }
 
@@ -210,10 +215,20 @@ public sealed partial class DraftPlugin
                 ns.SavedRoundsTotal = Marshal.ReadInt32(state, RoundsTotalOffset);
                 if (!ns.Bot && Players.FromSlot(ns.Slot) is { } c)
                 {
-                    c.HudAnnounce(ns.Ru ? "ВЫБОР СПОСОБНОСТЕЙ" : "ABILITY DRAFT", ns.Ru ? "Напиши в чат 1, 2 или 3 — клик по карточке не работает" : "Type 1, 2 or 3 in chat - clicking a card does nothing");
-                    Chat.PrintToChat(c, ns.Ru
-                        ? "[Draft] Выбор способностей: напиши в чат 1, 2 или 3 (слева, сверху, справа). «Прокрутить» меняет все три. Клик мышью по карточке не работает."
-                        : "[Draft] Ability draft: type 1, 2 or 3 in chat (left, top, right). The Reroll button deals new cards. Clicking a card does nothing.");
+                    if (ns.Click)
+                    {
+                        c.HudAnnounce(ns.Ru ? "ВЫБОР СПОСОБНОСТЕЙ" : "ABILITY DRAFT", ns.Ru ? "Кликни по карточке или напиши в чат 1, 2 или 3" : "Click a card or type 1, 2 or 3 in chat");
+                        Chat.PrintToChat(c, ns.Ru
+                            ? "[Draft] Выбор способностей: кликни по карточке или напиши в чат 1, 2 или 3. Карточки пустые? Нет аддона — напиши /click."
+                            : "[Draft] Ability draft: click a card or type 1, 2 or 3 in chat. Blank cards? The addon is missing - type /click.");
+                    }
+                    else
+                    {
+                        c.HudAnnounce(ns.Ru ? "ВЫБОР СПОСОБНОСТЕЙ" : "ABILITY DRAFT", ns.Ru ? "Напиши в чат 1, 2 или 3 — клик по карточке не работает" : "Type 1, 2 or 3 in chat - clicking a card does nothing");
+                        Chat.PrintToChat(c, ns.Ru
+                            ? "[Draft] Выбор способностей: напиши в чат 1, 2 или 3 (слева, сверху, справа). «Прокрутить» меняет все три. Клик работает только с аддоном (/click)."
+                            : "[Draft] Ability draft: type 1, 2 or 3 in chat (left, top, right). The Reroll button deals new cards. Clicking needs the addon (/click).");
+                    }
                 }
             }
             pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, RerollsPerPick);
@@ -236,26 +251,20 @@ public sealed partial class DraftPlugin
             pool.Remove(pick);
             ns.Seen.Add(pick.Name);
             ns.Offer[i] = pick;
-            uint ability = MurmurHash2.HashLowerCase(pick.Name, TokenSeed);
-            ns.Written[i] = _stubItems ? MurmurHash2.HashLowerCase(StubItems[i], TokenSeed) : ability;
+            ns.Written[i] = MurmurHash2.HashLowerCase(ns.Click ? TwinPrefix + pick.Name : pick.Name, TokenSeed);
             Marshal.WriteInt32(data, i * OptionSize + OptionItemId, (int)ns.Written[i]);
             Marshal.WriteByte(data, i * OptionSize + OptionRare, 0);
-            if (_stubItems)
-            {
-                Marshal.WriteInt32(data, i * OptionSize + OptionBonus1Id, (int)ability);
-                Marshal.WriteInt32(data, i * OptionSize + OptionBonus1Bits, 1);
-                Marshal.WriteInt32(data, i * OptionSize + OptionBonus1Level, 1);
-            }
-            Marshal.WriteByte(data, i * OptionSize + OptionDrafted, (byte)(_markDrafted && !_stubItems ? 1 : 0));
+            // A bare ability must not be clicked (the client crashes on it), a twin is there to be clicked.
+            Marshal.WriteByte(data, i * OptionSize + OptionDrafted, (byte)(_markDrafted && !ns.Click ? 1 : 0));
             // Bit 1 of the upgrade bits is the "enhanced" badge the dealt item may have carried.
             Marshal.WriteByte(data, i * OptionSize + OptionUpgradeBits, (byte)(Marshal.ReadByte(data, i * OptionSize + OptionUpgradeBits) & ~2));
         }
         ns.NextBotAt = Now + BotThinkSeconds;
         (ns.Prev1, ns.Prev2, ns.Prev3) = (true, true, true);      // a key still held from the last pick does not count
-        Log($"native slot {ns.Slot} round {ns.Round + 1}: {string.Join(", ", ns.Offer.Select(a => a!.Name))} (rerolls {pawn.GetCurrency(ECurrencyType.EItemDraftRerolls)}, drafted flag {(_markDrafted ? 1 : 0)})");
+        Log($"native slot {ns.Slot} round {ns.Round + 1}: {string.Join(", ", ns.Offer.Select(a => a!.Name))} (rerolls {pawn.GetCurrency(ECurrencyType.EItemDraftRerolls)}, {(ns.Click ? "twins" : $"drafted flag {(_markDrafted ? 1 : 0)}")})");
     }
 
-    void PickNative(NativeSeat ns, CCitadelPlayerPawn pawn, int i)
+    void PickNative(NativeSeat ns, CCitadelPlayerPawn pawn, int i, bool clicked = false)
     {
         if (ns.Offer[i] is not { } pick) return;
         if (_taken.Contains(pick.Name) && FreeAbilitiesLeft(ns, pick.Ult))
@@ -309,9 +318,29 @@ public sealed partial class DraftPlugin
         }
         // Dealing again is the only thing that makes the client redraw the cards; the reroll spends the one just added.
         // In a borrowed phase there are no items to go back to: the finished player just gets the screen closed.
-        if (ns.Round >= Slots && _nativeThenStandard) CloseDraft(pawn);
-        else Native.Reroll(pawn);
+        bool close = ns.Round >= Slots && _nativeThenStandard;
+        if (!clicked)
+        {
+            if (close) CloseDraft(pawn); else Native.Reroll(pawn);
+            return;
+        }
+        // A clicked card gets the stock "taken" look first: the engine marks the option drafted and only then moves
+        // on, and the client plays its pick animation off that flag. The state is re-sent by writing it back as is.
+        var options = Marshal.ReadIntPtr(state, StateOptionData);
+        if (options != IntPtr.Zero && i < Marshal.ReadInt32(state, StateOptionCount))
+        {
+            Marshal.WriteByte(options, i * OptionSize + OptionDrafted, 1);
+            DraftState.Set(pawn.Handle, DraftState.Get(pawn.Handle));
+        }
+        int seat = ns.Slot;
+        Timer.Once(PickAnimationSeconds.Seconds(), () =>
+        {
+            if (!_native.ContainsKey(seat) || Players.FromSlot(seat)?.GetHeroPawn() is not { } p) return;
+            if (close) CloseDraft(p); else Native.Reroll(p);
+        });
     }
+
+    const double PickAnimationSeconds = 0.9;
 
     readonly HashSet<string> _taken = new();        // abilities somebody has drafted in the current draft
 
@@ -378,16 +407,39 @@ public sealed partial class DraftPlugin
         return HookResult.Continue;
     }
 
-    /// <summary>In stub mode a click on a card is the client buying that card's stub item. Returns true when it was one.</summary>
+    /// <summary>A click on a twin card is the client buying that item. Returns true when the command was one.</summary>
     bool NativeBuyClick(ClientConCommandEvent args)
     {
-        if (!_stubItems || args.Command != "buyitem" || args.Controller is not { } c) return false;
-        if (!_native.TryGetValue(c.Slot, out var ns) || ns.Bot || ns.Round >= Slots || ns.Offer[0] == null) return false;
-        int card = Array.FindIndex(StubItems, name => args.Args.Contains(name, StringComparer.OrdinalIgnoreCase));
-        if (card < 0) return false;
-        Log($"native slot {ns.Slot} clicked card {card + 1} ({StubItems[card]})");
-        if (c.GetHeroPawn() is { } pawn) PickNative(ns, pawn, card);
+        if (args.Command != "buyitem" || args.Controller is not { } c) return false;
+        // A twin is never really bought, whatever state the draft is in (a second click during the pick animation,
+        // a card that has just been replaced): the engine must not see the purchase.
+        if (!args.Args.Any(a => a.StartsWith(TwinPrefix, StringComparison.OrdinalIgnoreCase))) return false;
+        if (!_native.TryGetValue(c.Slot, out var ns) || !ns.Click || ns.Round >= Slots || ns.Offer[0] == null) return true;
+        int card = Array.FindIndex(ns.Offer, a => a != null && args.Args.Contains(TwinPrefix + a.Name, StringComparer.OrdinalIgnoreCase));
+        if (card < 0) return true;
+        Log($"native slot {ns.Slot} clicked card {card + 1} ({ns.Offer[card]!.Name})");
+        if (c.GetHeroPawn() is { } pawn) PickNative(ns, pawn, card, clicked: true);
         return true;
+    }
+
+    /// <summary>Switches twin cards on or off for a seat; the cards on screen are dealt again to match.</summary>
+    void SetClick(CCitadelPlayerController c, bool on)
+    {
+        if (on) _clickers.Add(c.PlayerSteamId); else _clickers.Remove(c.PlayerSteamId);
+        if (!_native.TryGetValue(c.Slot, out var ns) || ns.Click == on) return;
+        ns.Click = on;
+        if (ns.Round < Slots && ns.Offer[0] != null && c.GetHeroPawn() is { } pawn) FreeReroll(pawn);
+    }
+
+    [Command("click", Description = "Clickable draft cards (needs the client addon): /click, /click off")]
+    public void CmdClick(CCitadelPlayerController caller, string mode = "")
+    {
+        bool on = mode.Length == 0 ? !_clickers.Contains(caller.PlayerSteamId) : mode is not ("off" or "0");
+        SetClick(caller, on);
+        bool ru = !_seats.TryGetValue(caller.Slot, out var s) || s.Ru;
+        Chat.PrintToChat(caller, on
+            ? ru ? "[Draft] Клик по карточкам включён. Нужен аддон AbilityDraft; если карточки пустые — напиши /click ещё раз." : "[Draft] Clickable cards are on. They need the AbilityDraft addon; if the cards are blank, type /click again."
+            : ru ? "[Draft] Клик по карточкам выключен, выбирай цифрой в чате." : "[Draft] Clickable cards are off, pick with a digit in chat.");
     }
 
     /// <summary>Ability keys 1-3 on the stock draft screen. Returns true when the input belonged to the native draft.</summary>

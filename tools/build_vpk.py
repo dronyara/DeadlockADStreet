@@ -8,16 +8,20 @@ result into a VPK. No game file is stored in this repository; the VPK is made on
 
 Install on a client (optional, players without it just see the stock title):
   1. copy the VPK to  game/citadel/addons/pak01_dir.vpk  (create the folder);
-  2. in game/citadel/gameinfo.gi add the line  Game citadel/addons  above  Game citadel  inside SearchPaths.
+  2. in game/citadel/gameinfo.gi make the end of SearchPaths read (one per line; without the Mod and Write lines
+     the game will not start):  Game citadel/addons / Mod citadel / Write citadel / Game citadel / Mod core /
+     Write core / Game core
 A game update restores gameinfo.gi, so step 2 has to be repeated after patches.
 """
-import hashlib, io, os, re, struct, sys, zlib
+import os, re, sys
 
-args = [a for a in sys.argv[1:] if not a.startswith("--")]
-game = args[0] if args else r"C:\Program Files (x86)\Steam\steamapps\common\Deadlock"
+from vpkfile import build_vpk
+
 out = "dist/abilitydraft_dir.vpk"
 if "--out" in sys.argv:
-    out = sys.argv[sys.argv.index("--out") + 1]
+    out = sys.argv.pop(sys.argv.index("--out") + 1)
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+game = args[0] if args else r"C:\Program Files (x86)\Steam\steamapps\common\Deadlock"
 
 # The stock screen first shows ability cards and then, in Street Brawl, goes on to items - so the title names both.
 TITLE_KEY = "Citadel_StreetBrawl_Draft_Title"
@@ -48,36 +52,6 @@ for lang, title in TITLES.items():
 
 if not files:
     raise SystemExit("nothing to pack")
-
-
-def build_vpk(entries):
-    """A single-file VPK v2: header, directory tree, then the file data."""
-    tree = {}       # ext -> dir -> [(name, data)]
-    for path, data in entries.items():
-        d, base = os.path.split(path)
-        name, ext = os.path.splitext(base)
-        tree.setdefault(ext[1:], {}).setdefault(d or " ", []).append((name, data))
-    t, blob, offset = io.BytesIO(), io.BytesIO(), 0
-    for ext, dirs in tree.items():
-        t.write(ext.encode() + b"\0")
-        for d, items in dirs.items():
-            t.write(d.encode() + b"\0")
-            for name, data in items:
-                t.write(name.encode() + b"\0")
-                # crc, preload bytes, archive index (0x7fff = this file), offset, length, terminator
-                t.write(struct.pack("<IHHIIH", zlib.crc32(data) & 0xFFFFFFFF, 0, 0x7FFF, offset, len(data), 0xFFFF))
-                blob.write(data)
-                offset += len(data)
-            t.write(b"\0")
-        t.write(b"\0")
-    t.write(b"\0")
-    tree_bytes, data_bytes = t.getvalue(), blob.getvalue()
-    header = struct.pack("<IIIIIII", 0x55AA1234, 2, len(tree_bytes), len(data_bytes), 0, 48, 0)
-    body = header + tree_bytes + data_bytes
-    checksums = hashlib.md5(tree_bytes).digest() + hashlib.md5(b"").digest()
-    checksums += hashlib.md5(body + checksums).digest()
-    return body + checksums
-
 
 os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
 vpk = build_vpk(files)

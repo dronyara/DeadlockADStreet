@@ -1,0 +1,8 @@
+<root>
+	<styles>
+		<include src="file://{resources}/styles/abilitydraft_click.css" />
+	</styles>
+	<Button class="AbilityDraftTrainClick" hittest="true" hittestchildren="false" canfocus="false">
+		<GlobalClassListener classes="gDetailView gScoreboardOpen" hittest="false" />
+	</Button>
+</root>

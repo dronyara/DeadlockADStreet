@@ -1,0 +1,18 @@
+/* Sits on top of an ability icon. Only there while the upgrade view (TAB) is open, so that in a fight the icon
+   keeps its own hover and tooltip. */
+.AbilityDraftTrainClick
+{
+	width: 100%;
+	height: 100%;
+	z-index: 1000;
+	background-color: transparent;
+	visibility: collapse;
+}
+
+.gScoreboardOpen.AbilityDraftTrainClick,
+.gDetailView.AbilityDraftTrainClick,
+.gScoreboardOpen .AbilityDraftTrainClick,
+.gDetailView .AbilityDraftTrainClick
+{
+	visibility: visible;
+}

@@ -190,9 +190,13 @@ public sealed partial class DraftPlugin
                 foreach (var pawn in Players.GetAllPawns())
                     Log($"  slot={pawn.Controller?.Slot} all=[{string.Join(", ", pawn.AbilityComponent.Abilities.Where(x => x.IsItem || x.IsSignature).Select(x => $"{x.AbilityName}@{x.AbilitySlot}"))}]");
                 break;
-            case "stub":
-                _stubItems = a.Length == 0 || a[0] != "0";
-                Log($"stub items on ability cards = {_stubItems}");
+            case "click":
+                // click <slot> 0|1 - twin cards for a seat, as /click does
+                if (a.Length > 0 && int.TryParse(a[0], out var clickSlot) && Players.FromSlot(clickSlot) is { } clicker)
+                {
+                    SetClick(clicker, a.Length < 2 || a[1] != "0");
+                    Log($"twin cards for slot {clickSlot} = {_clickers.Contains(clicker.PlayerSteamId)}");
+                }
                 break;
             case "markdrafted":
                 _markDrafted = a.Length == 0 || a[0] != "0";
