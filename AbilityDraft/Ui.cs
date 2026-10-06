@@ -31,10 +31,15 @@ public sealed partial class DraftPlugin
 
     bool _panelWired;
 
+    // The plugin's own draft and vote panels have never been run against a real client, and the optional addon now
+    // brings the UI bridge to players who would otherwise never have had it. Until the panels are tested they stay
+    // off: chat and the stock draft screen are the supported inputs.
+    const bool PanelUi = false;
+
     // The panel channel is only touched once a launcher client is actually present.
     bool HasUi(Seat s)
     {
-        if (s.Bot || !UI.HasClientBootstrap(s.Slot)) return false;
+        if (!PanelUi || s.Bot || !UI.HasClientBootstrap(s.Slot)) return false;
         if (!_panelWired)
         {
             _panelWired = true;

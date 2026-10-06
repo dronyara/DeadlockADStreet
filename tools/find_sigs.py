@@ -1,4 +1,4 @@
-"""Finds the two server.dll functions Ability Draft calls and writes their byte signatures.
+"""Finds the server.dll functions Ability Draft calls and writes their byte signatures.
 
 Run after a Deadlock patch if the server log says "signature not found":
     pip install capstone
@@ -8,7 +8,8 @@ How it finds them (so it can be redone by hand in any disassembler):
   The pawn's client-command dispatcher compares the command name against a chain of strings.
     "itemdraftskip"   -> ... -> mov rcx, <pawn> ; call SKIP      (advance to the next draft pick)
     "itemdraftreroll" -> ... -> mov rcx, <pawn> ; call REROLL    (deal three new options)
-  In both branches the wanted call is the LAST call before the branch jumps back to the common exit.
+    "trainorupgradeability" -> ... -> mov rdx, <ability> ; mov rcx, <pawn> ; call TRAIN   (unlock or upgrade)
+  In all three branches the wanted call is the LAST call before the branch jumps back to the common exit.
 The signature is the function's first bytes with every relative address replaced by "?".
 Output: AbilityDraft.signatures.json next to the plugin DLL (the plugin reads it on load).
 """
@@ -59,8 +60,8 @@ def handler_call(command):
     ins = list(md.disasm(d[rva2off(at):rva2off(at) + 32], at))
     branch = next(int(i.op_str, 16) for i in ins if i.mnemonic == "je")          # lea ; cmp ; je <branch>
     last = None
-    for i in md.disasm(d[rva2off(branch):rva2off(branch) + 96], branch):
-        if i.mnemonic == "call":
+    for i in md.disasm(d[rva2off(branch):rva2off(branch) + 256], branch):
+        if i.mnemonic == "call" and i.operands[0].type == X86_OP_IMM:
             last = int(i.op_str, 16)
         if i.mnemonic == "jmp":
             break
@@ -103,7 +104,8 @@ def last_call_in(rva, limit=0x400):
 
 
 sigs = {}
-rvas = {key: handler_call(command) for key, command in (("ItemDraftSkip", "itemdraftskip"), ("ItemDraftReroll", "itemdraftreroll"))}
+rvas = {key: handler_call(command) for key, command in (("ItemDraftSkip", "itemdraftskip"), ("ItemDraftReroll", "itemdraftreroll"),
+                                                        ("TrainAbility", "trainorupgradeability"))}
 # Skip is switched off in release builds, but it ends by calling the function that really moves a hero on to the
 # next draft pick - or ends the draft, telling the client to close the screen - and that one has no such gate.
 rvas["ItemDraftAdvance"] = last_call_in(rvas["ItemDraftSkip"])

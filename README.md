@@ -71,17 +71,42 @@ server log.
 
 No two players get the same ability. A card another player takes while it is on your screen is replaced for free.
 
+## Optional client addon (clickable cards, TAB upgrades)
+Players who want to use the mouse can install a VPK; everyone else keeps typing digits, in the same lobby.
+It is built on the machine that owns the game, because it carries a copy of the game's ability data:
+```
+tools\dump-vdata.ps1 -Vrf <vrf.dll>
+python tools/build_cards.py dist/cards --csdk "<Reduced_CSDK_12 folder>"
+```
+This needs [CSDK 12](https://deadlockmodding.pages.dev/modding-tools/csdk-12) for its resource compiler. Install:
+copy `dist/cards/abilitydraft_cards_dir.vpk` to `game/citadel/addons/pak01_dir.vpk` and make the end of
+`SearchPaths` in `game/citadel/gameinfo.gi` read `Game citadel/addons`, `Mod citadel`, `Write citadel`,
+`Game citadel`, `Mod core`, `Write core`, `Game core` (one per line). A game update restores `gameinfo.gi`.
+
+What it adds:
+- **Clickable draft cards with the ability's tooltip.** Type `/click` in chat before the draft. Every ability gets
+  a twin item (`ad_<ability>`) the stock screen can safely "buy"; the plugin answers the purchase with the ability.
+- **The TAB upgrade view.** A click on an ability trains the drafted one, and the upgrade pips show its real state.
+  This part comes through the Deadworks UI bridge, which the VPK includes unchanged (scripts under GPL-3.0, source
+  in `client-bootstrap` of the Deadworks repository).
+
+Rebuild the VPK after every game patch that touches items or abilities. Upgrading by click and items that attach
+to one ability follow [Binger4/Deadlock-Ability-Draft](https://github.com/Binger4/Deadlock-Ability-Draft) (MIT).
+Tested by one player on build 6745; the upgrade pips and ability-targeted items have not been confirmed in game yet.
+
 ## After a game patch
 Deadworks stops starting until its next release, and the plugin's own signatures may need regenerating.
 [PATCHING.md](PATCHING.md) lists what to check, in order.
 
 ## Known limits
-- **Ability cards cannot be clicked.** The stock screen treats every card as an item, and buying an "item" that is
-  really an ability crashes the client, so the plugin marks the cards as already taken: a click does nothing and
-  picks go through chat. After a pick the old cards stay until the wheel has spun to the new ones.
+- **Without the optional addon, ability cards cannot be clicked.** The stock screen treats every card as an item,
+  and buying an "item" that is really an ability crashes the client, so the plugin marks the cards as already
+  taken: a click does nothing and picks go through chat. After a pick the old cards stay until the wheel has spun
+  to the new ones.
 - **The header still says "item draft".** That text is in the client's localization and cannot be changed by a server.
-- **The TAB upgrade menu shows the hero's original abilities**, because it takes its layout from the hero's data on
-  the client. In Street Brawl the drafted kit therefore starts fully unlocked.
+- **Without the optional addon, the TAB upgrade view is built for the hero's original abilities**: a click there
+  does nothing and the pips stay empty (ALT + ability key works). In Street Brawl the drafted kit therefore starts
+  fully unlocked.
 - **Standard gives 50 seconds for all four picks**, because the draft borrows Street Brawl's first buy phase.
 - Tested with one player and bots. A full lobby and a complete match have not been tested, and only a handful of the
   152 abilities have been cast on a foreign hero.

@@ -168,6 +168,8 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     void Tick()
     {
         PollBridge();
+        SyncTrainHud();
+        TickImbues();
         switch (_phase)
         {
             case Phase.Drafting: TickDraft(); break;
