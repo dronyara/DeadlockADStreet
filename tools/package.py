@@ -88,7 +88,7 @@ AFTER A GAME PATCH
   game. Regenerate it with tools/find_sigs.py from the repository (see PATCHING.md there). Until then the
   plugin falls back to a text menu instead of the draft screen.
 
-Source, journal and patch notes: https://github.com/dronyara/DeadlockADStreet
+Source, journal and patch notes: https://github.com/dronyara/DeadlockAbilityBrawl
 Made with AI assistance (Claude Code + universal-modder). Use on your own servers only.
 """
 
