@@ -13,6 +13,8 @@ public sealed partial class DraftPlugin
     bool TrainCommand(ClientConCommandEvent args)
     {
         if (args.Controller is not { } c || !_kits.ContainsKey(c.Slot)) return false;
+        // With the kit written into the hero's own table the stock commands find the right ability by themselves.
+        if (HasNativeKit(c)) return false;
         // The stock HUD click sends these for the hero's original ability; left alone they would do nothing or,
         // when an original happens to sit in another slot, train the wrong one.
         if (args.Command is "upgrade_ability" or "upgrade_ability_in_field") return true;
@@ -25,14 +27,18 @@ public sealed partial class DraftPlugin
         return true;
     }
 
-    // ---- the click in the TAB upgrade view -------------------------------------------------------------------
-    // Clients with the optional addon carry the Deadworks UI bridge and a small script (addon/panorama) that puts a
-    // button over each ability icon and sends the command above. The script only runs where the server loads it,
-    // and only acts while "train" is 1, so it stays quiet on other servers and outside a drafted match.
+    // ---- the client's addon script ---------------------------------------------------------------------------
+    // Clients with the optional addon carry the Deadworks UI bridge and a small script (addon/panorama). The server
+    // loads it for a player from the moment their draft begins and tells it:
+    //   "train"  1 while the player holds a drafted kit in a running match: clicks in the TAB view are live
+    //   "skills" the kit's upgrade state, which the script shows on the game's own upgrade pips - the client works
+    //            those out for the hero's original abilities and would leave them empty
+    //   "buy"    buy this item (Imbue.cs)
+    // The script only runs where a server loads it, so it stays quiet everywhere else.
     const string TrainPanelId = "abilitydraft_hud";
     const string TrainLayout = "file://{resources}/layout/abilitydraft_hud.xml";
     readonly Dictionary<int, bool> _trainHud = new();       // slot -> the "train" value the client was last told
-    readonly Dictionary<int, string> _trainSkills = new();  // slot -> the upgrade state the client was last told
+    readonly Dictionary<int, string> _trainSkills = new();  // slot -> the "skills" value the client was last told
     bool _trainHudWired;
 
     void SyncTrainHud()
@@ -42,14 +48,12 @@ public sealed partial class DraftPlugin
             _trainHud.Remove(gone);
             _trainSkills.Remove(gone);
         }
-        if (!Native.CanTrain) return;
         foreach (var c in Players.GetAll())
         {
             if (c.IsBot || !UI.HasClientBootstrap(c.Slot)) continue;
-            bool want = _phase == Phase.Match && _kits.ContainsKey(c.Slot);
+            bool train = _phase == Phase.Match && _kits.ContainsKey(c.Slot);
             bool loaded = _trainHud.TryGetValue(c.Slot, out bool told);
-            if (want && loaded && told) SendSkills(c);
-            if (!loaded && !want || loaded && told == want) continue;
+            if (!loaded && !train && !_native.ContainsKey(c.Slot)) continue;
             if (!_trainHudWired)
             {
                 _trainHudWired = true;
@@ -57,20 +61,19 @@ public sealed partial class DraftPlugin
                 UI.ClientResync += slot => { _trainHud.Remove(slot); _trainSkills.Remove(slot); };
             }
             if (!loaded) UI.Panel(TrainPanelId).LoadXml(c.Recipients, TrainLayout);
-            UI.Panel(TrainPanelId).Set(c.Recipients, "train", want ? "1" : "0");
-            _trainHud[c.Slot] = want;
-            _trainSkills.Remove(c.Slot);
-            if (want) SendSkills(c);
-            Log($"train hud for slot {c.Slot}: {(loaded ? "" : "loaded, ")}train={(want ? 1 : 0)}");
+            if (!loaded || told != train)
+            {
+                UI.Panel(TrainPanelId).Set(c.Recipients, "train", train ? "1" : "0");
+                _trainHud[c.Slot] = train;
+                Log($"addon script for slot {c.Slot}: {(loaded ? "" : "loaded, ")}train={(train ? 1 : 0)}");
+            }
+            if (train) SendSkills(c);
         }
     }
 
     static readonly int[] TierCost = [1, 2, 5];
 
-    /// <summary>
-    /// The stock upgrade pips are drawn for the hero's original abilities, so the client draws its own from this:
-    /// per slot the upgrade bits (bit 0 unlocked, bits 1-3 the tiers) and whether the next step can be afforded.
-    /// </summary>
+    /// <summary>Per slot "<upgrade bits>:<can the next step be afforded>"; bit 0 is unlocked, bits 1-3 the tiers.</summary>
     void SendSkills(CCitadelPlayerController c)
     {
         if (c.GetHeroPawn() is not { } pawn) return;
@@ -80,8 +83,8 @@ public sealed partial class DraftPlugin
         {
             if (pawn.GetAbilityBySlot((EAbilitySlot)slot) is not CCitadelBaseAbility a) return;
             int bits = a.UpgradeBits, tier = (bits & 2) == 0 ? 0 : (bits & 4) == 0 ? 1 : (bits & 8) == 0 ? 2 : 3;
-            bool canTrain = a.CanBeUpgraded && ((bits & 1) == 0 ? unlocks > 0 : tier < 3 && points >= TierCost[tier]);
-            parts.Add($"{bits}:{(canTrain ? 1 : 0)}");
+            bool can = a.CanBeUpgraded && ((bits & 1) == 0 ? unlocks > 0 : tier < 3 && points >= TierCost[tier]);
+            parts.Add($"{bits}:{(can ? 1 : 0)}");
         }
         string state = string.Join(",", parts);
         if (_trainSkills.GetValueOrDefault(c.Slot) == state) return;

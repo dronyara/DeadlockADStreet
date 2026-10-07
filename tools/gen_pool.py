@@ -39,13 +39,16 @@ def cs(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+UNRELEASED = {"hero_baba"}
 ab = blocks(abil)
 rows = []
 skipped = []
 for hero, b in blocks(heroes).items():
     if not hero.startswith("hero_") or hero in ("hero_base", "hero_targetdummy", "hero_genericperson"):
         continue
-    if field(b, "m_bDisabled") == "true" or field(b, "m_bInDevelopment") == "true":
+    # Heroes still in development are left out - except the ones named here, whose abilities are wanted in the
+    # draft anyway. They are not playable heroes, only a source of abilities.
+    if field(b, "m_bDisabled") == "true" or field(b, "m_bInDevelopment") == "true" and hero not in UNRELEASED:
         continue
     sig = [m.group(1) if (m := re.search(r'ESlot_Signature_%d = "([^"]+)"' % i, b)) else None for i in range(1, 5)]
     if None in sig:
@@ -65,5 +68,6 @@ with io.open(out, "w", encoding="utf-8", newline="\n") as f:
     for r in rows:
         f.write("        new(%s, %s, %s, %d, %s, %s, %s, %s, %s),\n" % (
             cs(r[0]), cs(r[1]), cs(r[2]), r[3], cs(r[4]), cs(r[5]), cs(r[6]), "true" if r[7] else "false", cs(r[8])))
-    f.write("    ];\n}\n")
+    f.write("    ];\n\n    // Heroes that cannot be picked yet; only their abilities are in the pool.\n")
+    f.write("    public static readonly string[] Unreleased = [%s];\n}\n" % ", ".join(cs(h) for h in sorted(UNRELEASED)))
 print(f"{len(rows)} abilities from {len(rows)//4} heroes; skipped (no kit): {skipped}")

@@ -5,7 +5,7 @@ namespace AbilityDraft;
 
 /// <summary>
 /// Ability Draft for Deadlock (server side, Deadworks plugin).
-/// Players join and pick heroes as usual; the host types /draft; everyone drafts four abilities, one slot at a
+/// Players join and pick heroes as usual; the lobby leader types /draft; everyone drafts four abilities, one slot at a
 /// time, from three random offers (each offer can be rerolled, Street Brawl style); then the lobby votes for the
 /// rules (Standard or Street Brawl) and the match starts with the drafted kits.
 /// </summary>
@@ -29,7 +29,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     {
         public int Slot;
         public bool Bot;
-        public bool Ru = true;
+        public bool Ru = _ru;
         public readonly string?[] Kit = new string?[Slots];
         public int Round;                                   // which ability slot is being drafted (0-3)
         public readonly AbilityDef?[] Offer = new AbilityDef?[Offers];
@@ -56,7 +56,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
 
     static float Now => GlobalVars.CurTime;
 
-    /// <summary>The host is the first human on the server; after a plugin hot reload it is found again here.</summary>
+    /// <summary>The lobby leader is the first human on the server; after a plugin hot reload it is found again here.</summary>
     int Host()
     {
         if (_hostSlot < 0 || Players.FromSlot(_hostSlot) is not { IsBot: false })
@@ -79,6 +79,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         Server.RemoveEngineLogListener(OnEngineLog);
         foreach (var s in _seats.Values) HidePanel(s);
         if (_panelWired) UI.ClientResync -= OnClientResync;
+        RestoreHeroTables();
     }
 
     public override void OnPrecacheResources()
@@ -98,10 +99,12 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         _loop?.Cancel();
         _seats.Clear();
         Server.ExecuteCommand("sv_hibernate_when_empty 0");
-        Server.ExecuteCommand("citadel_allow_duplicate_heroes 1");
         Server.ExecuteCommand($"{BrawlCvar} 0");          // every map starts as a Standard lobby; the vote decides
         Server.ExecuteCommand($"{ActiveLaneCvar} 0");
         LoadConfig();
+        Server.ExecuteCommand($"citadel_allow_duplicate_heroes {(_config.UniqueHeroes ? 0 : 1)}");
+        _matchOverAt = -1f;
+        _chaosHeroes.Clear();
         if (_phase == Phase.Restoring && _restore.Count > 0)
         {
             // The reload into Standard after a draft on the Street Brawl screen: hold the lobby until everyone is back.
@@ -116,6 +119,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
             _kits.Clear();
             _restore.Clear();
             _rules = Rules.None;
+            RestoreHeroTables();
         }
         _loop = Timer.Every(0.25.Seconds(), Tick);
     }
@@ -128,7 +132,11 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         return newState != EGameState.GameInProgress || _phase == Phase.Match;
     }
 
-    public override void OnGameStateChanged(EGameState newState) => Log($"game state -> {newState}");
+    public override void OnGameStateChanged(EGameState newState)
+    {
+        Log($"game state -> {newState}");
+        MatchOver(newState);
+    }
 
     // ---- players ---------------------------------------------------------------------------------------------
     public override void OnClientFullConnect(ClientFullConnectEvent args)
@@ -137,12 +145,14 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         if (c == null) return;
         Log($"player connected slot={args.Slot} name={c.PlayerName} bot={c.IsBot} mapchange={args.IsMapChangeReconnect}");
         if (c.IsBot) return;
+        if (LobbyIsFull(c)) return;
         if (_phase == Phase.Lobby)
             Chat.PrintToChat(c, args.Slot == Host()
-                ? "[Draft] Ты хост. Когда все выберут героев, напиши /draft. | You are the host: type /draft when everyone has a hero."
-                : "[Draft] Выбери героя и жди, пока хост начнёт драфт. | Pick a hero and wait for the host to start the draft.");
+                ? L("[Draft] Ты лидер лобби. Когда все выберут героев, напиши /draft (или /chaos — случайные герои и способности).",
+                    "[Draft] You are the lobby leader: type /draft when everyone has a hero (or /chaos for random heroes and abilities).")
+                : L("[Draft] Выбери героя и жди, пока лидер лобби начнёт драфт.", "[Draft] Pick a hero and wait for the lobby leader to start the draft."));
         if (_phase == Phase.Lobby && args.Slot == Host() && SteamConnectReady)
-            Chat.PrintToChat(c, $"[Draft] Друзья заходят без проброса портов: connect {_steamConnect} | Friends join with: connect {_steamConnect}");
+            Chat.PrintToChat(c, L($"[Draft] Друзья заходят без проброса портов: connect {_steamConnect}", $"[Draft] Friends join with: connect {_steamConnect}"));
     }
 
     public override void OnClientDisconnect(ClientDisconnectedEvent args)
@@ -153,7 +163,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         if (args.Slot == _hostSlot)
         {
             _hostSlot = Players.GetAll().FirstOrDefault(p => !p.IsBot && p.Slot != args.Slot)?.Slot ?? -1;
-            if (_hostSlot >= 0) Chat.PrintToChat(_hostSlot, "[Draft] Теперь ты хост. | You are the host now.");
+            if (_hostSlot >= 0) Chat.PrintToChat(_hostSlot, L("[Draft] Теперь ты лидер лобби.", "[Draft] You are the lobby leader now."));
         }
     }
 
@@ -170,13 +180,14 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         PollBridge();
         SyncTrainHud();
         TickImbues();
+        TickChaosHeroes();
         switch (_phase)
         {
             case Phase.Drafting: TickDraft(); break;
             case Phase.Voting: TickVote(); break;
             case Phase.Starting: if (Now >= _phaseEnd) StartMatch(); break;
             case Phase.Restoring: TickRestore(); break;
-            case Phase.Match: TickEmptyMatch(); break;
+            case Phase.Match: TickEmptyMatch(); TickMatchOver(); break;
         }
     }
 
@@ -196,10 +207,10 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     }
 
     // ---- draft -----------------------------------------------------------------------------------------------
-    [Command("draft", Description = "Host: start the ability draft for everyone on the server")]
+    [Command("draft", Description = "Lobby leader: start the ability draft for everyone on the server")]
     public void CmdDraft(CCitadelPlayerController? caller = null)
     {
-        if (caller != null && caller.Slot != Host()) throw new CommandException("Only the host can start the draft.");
+        if (caller != null && caller.Slot != Host()) throw new CommandException("Only the lobby leader can start the draft.");
         if (_phase != Phase.Lobby) throw new CommandException($"Draft is already running ({_phase}).");
         StartDraft();
     }
@@ -208,11 +219,12 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     {
         _seats.Clear();
         _kits.Clear();
+        RestoreHeroTables();
         foreach (var c in Players.GetAll())
         {
             if (c.GetHeroPawn() is not { } pawn || pawn.HeroID == 0)
             {
-                if (!c.IsBot) Chat.PrintToChat(c, "[Draft] Нет героя — ты пропускаешь драфт. | No hero picked, you sit this draft out.");
+                if (!c.IsBot) Chat.PrintToChat(c, L("[Draft] Нет героя — ты пропускаешь драфт.", "[Draft] No hero picked, you sit this draft out."));
                 continue;
             }
             _seats[c.Slot] = new Seat { Slot = c.Slot, Bot = c.IsBot };
@@ -237,7 +249,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         _phase = Phase.Drafting;
         _phaseEnd = Now + DraftSeconds;
         _nextTimerText = 0;
-        Announce("ABILITY DRAFT", "Выбери 4 способности · Pick 4 abilities");
+        Announce("ABILITY DRAFT", L("Выбери 4 способности", "Pick 4 abilities"));
         foreach (var s in _seats.Values) ShowOffer(s);
     }
 
@@ -246,7 +258,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         foreach (var s in _seats.Values) HidePanel(s);
         _phase = Phase.Starting;
         _phaseEnd = Now + StartDelaySeconds;
-        Announce(RulesName(_rules).ToUpperInvariant(), $"Матч начнётся через {StartDelaySeconds:0} с · Match starts in {StartDelaySeconds:0} s");
+        Announce(RulesName(_rules).ToUpperInvariant(), L($"Матч начнётся через {StartDelaySeconds:0} с", $"Match starts in {StartDelaySeconds:0} s"));
     }
 
     void DealRound(Seat s)
@@ -355,13 +367,13 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         _phase = Phase.Lobby;
     }
 
-    [Command("draftcancel", Description = "Host: cancel the running draft and go back to the lobby")]
+    [Command("draftcancel", Description = "Lobby leader: cancel the running draft and go back to the lobby")]
     public void CmdCancel(CCitadelPlayerController? caller = null)
     {
-        if (caller != null && caller.Slot != Host()) throw new CommandException("Only the host can cancel the draft.");
+        if (caller != null && caller.Slot != Host()) throw new CommandException("Only the lobby leader can cancel the draft.");
         if (_phase is not (Phase.Drafting or Phase.Voting)) throw new CommandException("No draft is running.");
-        CancelDraft("host");
-        Chat.PrintToChatAll("[Draft] Драфт отменён. | Draft cancelled.");
+        CancelDraft("lobby leader");
+        Chat.PrintToChatAll(L("[Draft] Драфт отменён.", "[Draft] Draft cancelled."));
     }
 
     // ---- applying a kit --------------------------------------------------------------------------------------
@@ -395,16 +407,21 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     /// locked, and the ability points already spent on the slot are gone with the old one - in Street Brawl, where
     /// points are handed out and spent before the draft is over, that left drafted abilities locked for good.
     /// </summary>
-    static bool PutAbility(CCitadelPlayerPawn pawn, int slot, string name, int upgradeBits)
+    bool PutAbility(CCitadelPlayerPawn pawn, int slot, string name, int upgradeBits)
     {
+        // First the hero's own table, so that the engine sees the new ability as the hero's from the start.
+        if (pawn.Controller is { } owner) BindHeroSlot(pawn.HeroID, owner.Slot, slot, name);
         if (pawn.AddAbility(name, (ushort)slot) == null) return false;
-        if (upgradeBits != 0 && pawn.GetAbilityBySlot((EAbilitySlot)slot) is CCitadelBaseAbility fresh && fresh.UpgradeBits != upgradeBits)
-            fresh.UpgradeBits = upgradeBits;
+        if (pawn.GetAbilityBySlot((EAbilitySlot)slot) is not CCitadelBaseAbility fresh) return true;
+        if (upgradeBits != 0 && fresh.UpgradeBits != upgradeBits) fresh.UpgradeBits = upgradeBits;
+        // An ability added this way lacks the flag the hero's own abilities get, and items that attach to an
+        // ability are then turned down although the pair fits.
+        if (AbilityCanBeImbuedKnown && !fresh.CanBeImbued) AbilityCanBeImbued.Set(fresh.Handle, true);
         return true;
     }
 
     /// <summary>Swaps the ability in one slot, keeping the slot's unlock and upgrade state.</summary>
-    static bool ReplaceAbility(CCitadelPlayerPawn pawn, int slot, string name)
+    bool ReplaceAbility(CCitadelPlayerPawn pawn, int slot, string name)
     {
         int bits = 0;
         if (pawn.GetAbilityBySlot((EAbilitySlot)slot) is CCitadelBaseAbility old)
@@ -424,7 +441,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         _phase = Phase.Voting;
         _phaseEnd = Now + VoteSeconds;
         Log("VOTE START");
-        Announce("ГОЛОСОВАНИЕ · VOTE", "1 — Standard   2 — Street Brawl");
+        Announce(L("ГОЛОСОВАНИЕ", "VOTE"), "1 — Standard   2 — Street Brawl");
         foreach (var s in _seats.Values)
         {
             s.Vote = Rules.None;
@@ -451,16 +468,23 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         if (Now < _phaseEnd && humans.Any(s => s.Vote == Rules.None)) return;
 
         int std = humans.Count(s => s.Vote == Rules.Standard), brawl = humans.Count(s => s.Vote == Rules.StreetBrawl);
-        // A tie goes to the host's vote, and to Standard when the host did not vote.
+        // A tie goes to the lobby leader's vote, and to Standard when the leader did not vote.
         _rules = brawl > std ? Rules.StreetBrawl
             : std > brawl ? Rules.Standard
             : _seats.TryGetValue(Host(), out var h) && h.Vote != Rules.None ? h.Vote : Rules.Standard;
         if (_forcedRules != Rules.None) (_rules, _forcedRules) = (_forcedRules, Rules.None);
+        if (_rules == Rules.StreetBrawl && _seats.Count > _config.MaxPlayersStreetBrawl)
+        {
+            _rules = Rules.Standard;
+            Chat.PrintToChatAll(L($"[Draft] Для Street Brawl слишком много игроков ({_seats.Count}, максимум {_config.MaxPlayersStreetBrawl}) — играем Standard.",
+                $"[Draft] Too many players for Street Brawl ({_seats.Count}, at most {_config.MaxPlayersStreetBrawl}) - playing Standard."));
+        }
         Log($"VOTE RESULT standard={std} brawl={brawl} -> {_rules}");
 
-        Chat.PrintToChatAll($"[Draft] Правила: {RulesName(_rules)} ({std}:{brawl}).");
-        // The draft runs on the stock Street Brawl screen once the match is up; the text menu is the fallback when it cannot.
-        if (Native.Ready) BeginCountdown();
+        Chat.PrintToChatAll(L($"[Draft] Правила: {RulesName(_rules)} ({std}:{brawl}).", $"[Draft] Rules: {RulesName(_rules)} ({std}:{brawl})."));
+        // The draft runs on the stock Street Brawl screen once the match is up; the text menu is the fallback when it
+        // cannot. Kits that are already there (/chaos) need no draft at all.
+        if (Native.Ready || _kits.Count > 0) BeginCountdown();
         else BeginTextDraft();
     }
 

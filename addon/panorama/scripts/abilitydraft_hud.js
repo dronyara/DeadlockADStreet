@@ -1,16 +1,20 @@
-// Ability Draft: makes the TAB upgrade view work for a drafted kit.
-// The stock view is built for the hero's ORIGINAL abilities: a click asks the server to train one of those, and
-// the upgrade pips show their state. A drafted kit no longer has them. So this
-//   - puts a button over each of the four ability icons that asks for "the ability in slot N" instead (the plugin
-//     answers with the engine's own training function, so points, requirements and effects stay stock), and
-//   - hides the stock pips and draws its own from the state the server sends ("skills": per slot "<bits>:<can>",
-//     bit 0 = unlocked, bits 1-3 = the three tiers, can = the next step is affordable right now).
-// Loaded by the server through the Deadworks UI bridge, and only for players who hold a drafted kit.
-// The approach and the pip drawing are from Binger4/Deadlock-Ability-Draft (MIT).
+// Ability Draft: the client half of what the stock UI only does for the hero's ORIGINAL abilities.
+// Loaded by the server through the Deadworks UI bridge, for a player in a draft or holding a drafted kit. It is told:
+//   train  = 1   the kit is live: a button over each of the four ability icons (TAB view) asks the server to train
+//                "the ability in slot N"
+//   skills       "<bits>:<can>" per slot (bit 0 unlocked, bits 1-3 the tiers, can = the next step is affordable):
+//                shown on the game's OWN upgrade pips by setting the classes its stylesheet already has, so the
+//                view looks exactly as in a normal match
+//   buy          "<n>|<item>": send an ordinary purchase of an item the server will attach to a drafted ability
+//   pick         "<n>|<card 0-2>": the player has just taken that card on the draft screen. The screen has a look
+//                for a taken card and for the ones passed over, but only shows it for a real purchase; here the
+//                same looks are put on by class. "dealt" = <n> says the next cards are out and takes them off
+// The approach is from Binger4/Deadlock-Ability-Draft (MIT).
 (function () {
 	'use strict';
 	var COST = [1, 2, 5];
-	var bindings = [], boundHud = null, enabled = false, alive = false, warned = false, skills = '';
+	var slots = [], boundHud = null, enabled = false, alive = false, warned = false;
+	var skills = '', lastBuy = '', pickSeq = 0, dealtSeq = 0, marked = [];
 
 	function root() { var p = $.GetContextPanel(); while (p.GetParent()) p = p.GetParent(); return p; }
 
@@ -20,94 +24,112 @@
 		return out;
 	}
 
-	function style(p, values) { Object.keys(values).forEach(function (k) { p.style[k] = values[k]; }); }
-
-	function train(slot) { $.DispatchEvent('CitadelConCommand', 'trainorupgradeability ' + slot); }
-
-	function nextTier(bits) { for (var t = 1; t <= 3; t++) if ((bits & (1 << t)) === 0) return t; return 4; }
-
 	function unbind() {
-		bindings.forEach(function (b) {
-			b.saved.forEach(function (s) { if (s.panel.IsValid()) s.panel.style.visibility = s.visibility || null; });
-			if (b.container && b.container.IsValid()) b.container.DeleteAsync(0);
-			if (b.click && b.click.IsValid()) b.click.DeleteAsync(0);
-		});
-		bindings = [];
+		slots.forEach(function (s) { if (s.click.IsValid()) s.click.DeleteAsync(0); });
+		slots = [];
 		boundHud = null;
-	}
-
-	function bindOne(pips, icon, slot) {
-		var b = { pips: pips, slot: slot, saved: [], rows: [] };
-		pips.Children().forEach(function (child) {
-			b.saved.push({ panel: child, visibility: child.style.visibility });
-			child.style.visibility = 'collapse';
-		});
-		b.container = $.CreatePanel('Panel', pips, 'AbilityDraftPips');
-		style(b.container, { width: '100%', height: '100%', flowChildren: 'up' });
-		for (var tier = 1; tier <= 3; tier++) {
-			var row = $.CreatePanel('Button', b.container, 'AbilityDraftTier' + tier);
-			style(row, { width: '100%', height: '40px', marginTop: '5px', borderRadius: '100px' });
-			var label = $.CreatePanel('Label', row, '');
-			style(label, { horizontalAlign: 'center', verticalAlign: 'center', fontSize: '22px', fontWeight: 'bold' });
-			row.SetPanelEvent('onactivate', function () { train(slot); });
-			b.rows.push({ panel: row, label: label, tier: tier });
-		}
-		var parent = icon.FindChildTraverse('button_container') || icon;
-		b.click = $.CreatePanel('Button', parent, 'AbilityDraftTrainClick' + slot);
-		b.click.BLoadLayout('file://{resources}/layout/abilitydraft_click.xml', false, false);
-		b.click.SetPanelEvent('onactivate', function () { train(slot); });
-		return b;
 	}
 
 	function bind() {
 		var hud = root().FindChildTraverse('hud_signature');
 		if (!hud) return false;
-		if (hud === boundHud && bindings.length === 4 && bindings.every(function (b) { return b.pips.IsValid() && b.click.IsValid(); })) return true;
+		if (hud === boundHud && slots.length === 4 && slots.every(function (s) { return s.click.IsValid() && s.pips.IsValid(); })) return true;
 		unbind();
-		var pips = descendants(hud, 'CitadelHudAbilityUpgradePips', []);
 		var icons = descendants(hud, 'CitadelAbilityIcon', []);
-		if (pips.length !== 4 || icons.length !== 4) {
-			if (!warned) { $.Msg('[AbilityDraft] ability HUD not ready: pips=' + pips.length + ' icons=' + icons.length); warned = true; }
+		var pips = descendants(hud, 'CitadelHudAbilityUpgradePips', []);
+		if (icons.length !== 4 || pips.length !== 4) {
+			if (!warned) { $.Msg('[AbilityDraft] ability HUD not ready: icons=' + icons.length + ' pips=' + pips.length); warned = true; }
 			return false;
 		}
-		for (var i = 0; i < 4; i++) bindings.push(bindOne(pips[i], icons[i], i + 1));
+		icons.forEach(function (icon, i) {
+			var parent = icon.FindChildTraverse('button_container') || icon;
+			var click = $.CreatePanel('Button', parent, 'AbilityDraftTrainClick' + (i + 1));
+			click.BLoadLayout('file://{resources}/layout/abilitydraft_click.xml', false, false);
+			click.SetPanelEvent('onactivate', function () {
+				$.DispatchEvent('CitadelConCommand', 'trainorupgradeability ' + (i + 1));
+			});
+			slots.push({ click: click, pips: pips[i] });
+		});
 		boundHud = hud;
 		$.Msg('[AbilityDraft] upgrade view bound to the four ability slots');
 		return true;
 	}
 
-	function draw() {
+	// The game sets these classes itself, for the hero's original ability; they are put back every frame.
+	function paint() {
 		var parts = skills.split(',');
 		if (parts.length !== 4) return;
-		bindings.forEach(function (b, i) {
+		slots.forEach(function (s, i) {
 			var pair = parts[i].split(':'), bits = parseInt(pair[0], 10) || 0, can = pair[1] === '1';
-			// The game re-shows its own pips now and then; keep them hidden while ours are up.
-			b.saved.forEach(function (s) { if (s.panel.IsValid()) s.panel.style.visibility = 'collapse'; });
-			b.rows.forEach(function (row) {
-				var learned = (bits & (1 << row.tier)) !== 0;
-				var next = row.tier === nextTier(bits);
-				var ready = !learned && next && can;
-				row.panel.enabled = ready;
-				row.panel.style.opacity = learned || ready ? '1' : '0.45';
-				row.panel.style.backgroundColor = learned ? '#c8b0f5' : ready ? '#69d897' : '#191c1b';
-				row.label.style.color = learned || ready ? '#17221c' : '#c3c6c3';
-				row.label.text = learned ? '✓' : String(COST[row.tier - 1]);
-			});
+			var unlocked = (bits & 1) !== 0, next = 4;
+			for (var t = 3; t >= 1; t--) if ((bits & (1 << t)) === 0) next = t;
+			s.pips.SetHasClass('isUnlocked', unlocked);
+			s.pips.SetHasClass('not_trained', !unlocked);
+			s.pips.SetHasClass('canUnlock', !unlocked && can);
+			s.pips.SetHasClass('ability_upgrade_available', unlocked && can && next <= 3);
+			for (var tier = 1; tier <= 3; tier++) {
+				var row = s.pips.FindChildTraverse('AbilityUnlock' + tier);
+				if (!row) continue;
+				var has = (bits & (1 << tier)) !== 0;
+				row.SetHasClass('hasAbilityUpgrade', has);
+				row.SetHasClass('canAffordUpgrade', unlocked && !has && tier === next && can);
+				row.SetDialogVariableInt('ability_point_cost', COST[tier - 1]);
+			}
 		});
 	}
 
 	// The HUD is rebuilt on respawn and hero change, so the binding is checked again and again, not made once.
 	function tick() {
 		if (!alive) return;
-		if (enabled) { if (bind()) draw(); } else if (bindings.length) unbind();
-		$.Schedule(0.25, tick);
+		if (enabled) { if (bind()) paint(); } else if (slots.length) unbind();
+		$.Schedule(0, tick);
 	}
 
-	function read(p) { enabled = p.get('train', '0') === '1'; skills = p.get('skills', ''); }
+	function unmark() {
+		marked.forEach(function (m) { if (m.panel.IsValid()) m.panel.RemoveClass(m.cls); });
+		marked = [];
+	}
+
+	function showPick(card) {
+		var container = root().FindChildTraverse('OptionsContainer');
+		if (!container) return;
+		unmark();
+		container.Children().forEach(function (option, i) {
+			var cls = i === card ? 'selected' : 'dismiss';
+			option.AddClass(cls);
+			marked.push({ panel: option, cls: cls });
+		});
+		// Never leave a card faded out if the server's "dealt" gets lost.
+		var mine = pickSeq;
+		$.Schedule(1.5, function () { if (pickSeq === mine) unmark(); });
+	}
+
+	function read(p) {
+		enabled = p.get('train', '0') === '1';
+		skills = p.get('skills', '');
+		var dealt = parseInt(p.get('dealt', '0'), 10) || 0;
+		var pick = p.get('pick', '').split('|'), seq = parseInt(pick[0], 10) || 0;
+		if (dealt > dealtSeq) { dealtSeq = dealt; if (dealt >= pickSeq) unmark(); }
+		// A pick whose deal is already out arrived too late to be shown.
+		if (seq > pickSeq) { pickSeq = seq; if (seq > dealtSeq) showPick(parseInt(pick[1], 10) || 0); }
+		var buy = p.get('buy', '');
+		if (buy !== lastBuy) {
+			lastBuy = buy;
+			var item = buy.split('|')[1] || '';
+			if (enabled && /^upgrade_[a-z0-9_]+$/.test(item)) $.DispatchEvent('CitadelConCommand', 'buyitem ' + item);
+		}
+	}
 
 	DW.registerPanel({
-		init: function (p) { alive = true; read(p); tick(); },
+		// Requests that were already there when the panel (re)loaded are old: do not act on them again.
+		init: function (p) {
+			alive = true;
+			lastBuy = p.get('buy', '');
+			pickSeq = parseInt(p.get('pick', '').split('|')[0], 10) || 0;
+			read(p);
+			tick();
+		},
 		render: function (p) { read(p); },
-		onDestroy: function () { alive = false; unbind(); }
+		onDestroy: function () { alive = false; unbind(); unmark(); }
 	});
 }());

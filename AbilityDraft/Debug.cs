@@ -135,6 +135,9 @@ public sealed partial class DraftPlugin
             case "draft":
                 StartDraft();
                 break;
+            case "chaos":
+                StartChaos();
+                break;
             case "pick":
                 Log($"bridge pick -> {Pick(_seats[int.Parse(a[0])], int.Parse(a[1]) - 1)}");
                 break;
@@ -189,6 +192,16 @@ public sealed partial class DraftPlugin
             case "abil":
                 foreach (var pawn in Players.GetAllPawns())
                     Log($"  slot={pawn.Controller?.Slot} all=[{string.Join(", ", pawn.AbilityComponent.Abilities.Where(x => x.IsItem || x.IsSignature).Select(x => $"{x.AbilityName}@{x.AbilitySlot}"))}]");
+                break;
+            case "herodata":
+                ProbeHeroData(a);
+                break;
+            case "herobind":
+                BindHeroAbility(a);
+                break;
+            case "peek":
+                if (a.Length > 0 && long.TryParse(a[0].Replace("0x", ""), System.Globalization.NumberStyles.HexNumber, null, out long peekAt))
+                    Peek((IntPtr)peekAt, a.Length > 1 && int.TryParse(a[1], out int peekLen) ? peekLen : 96);
                 break;
             case "click":
                 // click <slot> 0|1 - twin cards for a seat, as /click does
