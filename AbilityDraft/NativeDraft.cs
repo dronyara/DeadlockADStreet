@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using DeadworksManaged.Api;
+using DeadworksManaged.Api.UI;
 
 namespace AbilityDraft;
 
@@ -32,7 +33,7 @@ public sealed partial class DraftPlugin
     sealed class NativeSeat
     {
         public int Slot;
-        public bool Bot, Ru = true;
+        public bool Bot, Ru = _ru;
         public bool Click;                                  // deals twin items instead of bare abilities
         public int Round;
         public bool RoundOpen;                              // rerolls already granted for the current round
@@ -140,7 +141,7 @@ public sealed partial class DraftPlugin
             Server.ChangeLevel(Server.MapName);
             return;
         }
-        Announce("STANDARD", "Карта перезагружается, набор сохранён · Reloading the map, your kit is kept");
+        Announce("STANDARD", L("Карта перезагружается, набор сохранён", "Reloading the map, your kit is kept"));
         Server.ExecuteCommand($"{BrawlCvar} 0");
         Server.ExecuteCommand($"{ActiveLaneCvar} 0");
         _phase = Phase.Restoring;
@@ -177,6 +178,7 @@ public sealed partial class DraftPlugin
             if (Now < r.NextFixAt) continue;
             r.NextFixAt = Now + 3f;                         // hero changes take a moment to land; do not spam them
             _kits[c.Slot] = r.Kit;                          // re-applied by OnPawnHeroInitialized when the hero is rebuilt
+            BindHeroKit(r.Hero, c.Slot, r.Kit);             // so that the rebuilt hero is given the kit as its own
             if (c.TeamNum != r.Team) c.ChangeTeam(r.Team);
             if (pawn == null || pawn.HeroID != r.Hero) c.SelectHero(r.Hero);
             else ApplyKit(pawn, r.Kit);
@@ -199,7 +201,7 @@ public sealed partial class DraftPlugin
         _phase = Phase.Match;
         GameRules.ChangeGameState(EGameState.GameInProgress);
         GameRules.SetGameStartTime(Now);
-        Announce("STANDARD", "Матч начался · The match has started");
+        Announce("STANDARD", L("Матч начался", "The match has started"));
         Timer.Once(1.Seconds(), ApplyAllKits);
     }
 
@@ -264,7 +266,7 @@ public sealed partial class DraftPlugin
         Log($"native slot {ns.Slot} round {ns.Round + 1}: {string.Join(", ", ns.Offer.Select(a => a!.Name))} (rerolls {pawn.GetCurrency(ECurrencyType.EItemDraftRerolls)}, {(ns.Click ? "twins" : $"drafted flag {(_markDrafted ? 1 : 0)}")})");
     }
 
-    void PickNative(NativeSeat ns, CCitadelPlayerPawn pawn, int i, bool clicked = false)
+    void PickNative(NativeSeat ns, CCitadelPlayerPawn pawn, int i)
     {
         if (ns.Offer[i] is not { } pick) return;
         if (_taken.Contains(pick.Name) && FreeAbilitiesLeft(ns, pick.Ult))
@@ -273,7 +275,7 @@ public sealed partial class DraftPlugin
             if (!ns.Bot && Players.FromSlot(ns.Slot) is { } late)
                 Chat.PrintToChat(late, ns.Ru ? $"[Draft] «{pick.Ru}» уже забрали — вот новые карточки, прокрутка бесплатная." : $"[Draft] {pick.En} is already taken - here are new cards, this reroll is free.");
             Log($"native slot {ns.Slot} round {ns.Round + 1}: {pick.Name} is already taken, free reroll");
-            FreeReroll(pawn);
+            FreeReroll(ns, pawn);
             return;
         }
         bool ok = ReplaceAbility(pawn, ns.Round, pick.Name);
@@ -297,7 +299,6 @@ public sealed partial class DraftPlugin
                 Marshal.WriteByte(cards, card * OptionSize + OptionDrafted, 0);
             Marshal.WriteInt32(state, RoundsTotalOffset, ns.SavedRoundsTotal);
             Marshal.WriteInt32(state, RoundsLeftOffset, ns.SavedRoundsLeft);
-            pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, Math.Max(0, ns.SavedRerolls) + 1);
             if (!ns.Bot && Players.FromSlot(ns.Slot) is { } c)
                 Chat.PrintToChat(c, "[Draft] " + (ns.Ru ? "Твой набор: " : "Your kit: ") + string.Join(", ", ns.Kit.Select(k => AbilityPool.Find(k!)?.Title(ns.Ru) ?? k))
                     + (!_nativeThenStandard ? "" : ns.Ru ? ". Ждём остальных игроков." : ". Waiting for the other players."));
@@ -311,36 +312,64 @@ public sealed partial class DraftPlugin
             }
             Log($"native slot {ns.Slot} finished: [{string.Join(", ", ns.Kit)}]");
         }
-        else
-        {
-            Marshal.WriteInt32(state, RoundsLeftOffset, Slots - ns.Round);
-            pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, pawn.GetCurrency(ECurrencyType.EItemDraftRerolls) + 1);
-        }
-        // Dealing again is the only thing that makes the client redraw the cards; the reroll spends the one just added.
+        else Marshal.WriteInt32(state, RoundsLeftOffset, Slots - ns.Round);
+        // Dealing again is the only thing that makes the client redraw the cards.
         // In a borrowed phase there are no items to go back to: the finished player just gets the screen closed.
-        bool close = ns.Round >= Slots && _nativeThenStandard;
-        if (!clicked)
+        if (ns.Round >= Slots && _nativeThenStandard) { CloseDraft(pawn); return; }
+        if (ns.Bot || !_trainHud.ContainsKey(ns.Slot) || Players.FromSlot(ns.Slot) is not { } picker) { DealAfterPick(ns, pawn); return; }
+        // The stock screen has a look for a taken card (it grows) and for the ones passed over (they fade), but only
+        // shows it for a real purchase. A client with the addon is told which card was taken and puts those looks on
+        // itself; the next deal waits for that to play.
+        int seq = ++_pickSeq, seat = ns.Slot;
+        UI.Panel(TrainPanelId).Set(picker.Recipients, "pick", $"{seq}|{i}");
+        Timer.Once(PickShowSeconds.Seconds(), () =>
         {
-            if (close) CloseDraft(pawn); else Native.Reroll(pawn);
-            return;
-        }
-        // A clicked card gets the stock "taken" look first: the engine marks the option drafted and only then moves
-        // on, and the client plays its pick animation off that flag. The state is re-sent by writing it back as is.
-        var options = Marshal.ReadIntPtr(state, StateOptionData);
-        if (options != IntPtr.Zero && i < Marshal.ReadInt32(state, StateOptionCount))
-        {
-            Marshal.WriteByte(options, i * OptionSize + OptionDrafted, 1);
-            DraftState.Set(pawn.Handle, DraftState.Get(pawn.Handle));
-        }
-        int seat = ns.Slot;
-        Timer.Once(PickAnimationSeconds.Seconds(), () =>
-        {
-            if (!_native.ContainsKey(seat) || Players.FromSlot(seat)?.GetHeroPawn() is not { } p) return;
-            if (close) CloseDraft(p); else Native.Reroll(p);
+            if (!_native.TryGetValue(seat, out var still) || still != ns || Players.FromSlot(seat) is not { } who || who.GetHeroPawn() is not { } p) return;
+            DealAfterPick(ns, p);
+            UI.Panel(TrainPanelId).Set(who.Recipients, "dealt", seq.ToString());
         });
     }
 
-    const double PickAnimationSeconds = 0.9;
+    const double PickShowSeconds = 0.6;
+    int _pickSeq;
+
+    /// <summary>The deal that follows a pick: a reroll on the house.</summary>
+    void DealAfterPick(NativeSeat ns, CCitadelPlayerPawn pawn)
+    {
+        int rerolls = ns.Round >= Slots ? Math.Max(0, ns.SavedRerolls) : pawn.GetCurrency(ECurrencyType.EItemDraftRerolls);
+        pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, rerolls + 1);
+        RerollNow(ns, pawn);
+    }
+
+    /// <summary>
+    /// Has the engine deal again and, in the same tick, turns the new cards into abilities. Doing that a frame later
+    /// (as the per-frame check does) reaches the client as two updates: it puts the engine's cards up, then sees
+    /// them change and plays the reveal a second time, so cards that are already up blink one by one.
+    /// </summary>
+    void RerollNow(NativeSeat ns, CCitadelPlayerPawn pawn)
+    {
+        Native.Reroll(pawn);
+        if (ns.Round >= Slots) return;      // the draft is over: these are the player's real items
+        var state = DraftState.GetAddress(pawn.Handle);
+        var data = Marshal.ReadIntPtr(state, StateOptionData);
+        if (data == IntPtr.Zero || Marshal.ReadInt32(state, StateOptionCount) < Offers) return;
+        for (int i = 0; i < Offers; i++)
+        {
+            if (ns.Written[i] != 0 && (uint)Marshal.ReadInt32(data, i * OptionSize + OptionItemId) == ns.Written[i]) continue;
+            DealNative(ns, pawn, state, data);
+            return;
+        }
+    }
+
+    /// <summary>The Reroll button. Taken over so that the new cards are abilities from the first update on.</summary>
+    bool NativeRerollClick(ClientConCommandEvent args)
+    {
+        if (args.Command != "itemdraftreroll" || args.Controller is not { } c) return false;
+        if (!_native.TryGetValue(c.Slot, out var ns) || ns.Bot || c.GetHeroPawn() is not { } pawn) return false;
+        if (ns.Round >= Slots || ns.Offer[0] == null) return false;
+        RerollNow(ns, pawn);                // the engine function checks and spends the reroll itself
+        return true;
+    }
 
     readonly HashSet<string> _taken = new();        // abilities somebody has drafted in the current draft
 
@@ -363,10 +392,10 @@ public sealed partial class DraftPlugin
         Pool.Any(a => a.Ult == ult && !_taken.Contains(a.Name) && !ns.Kit.Contains(a.Name));
 
     /// <summary>Deals the hero new cards without spending one of their own rerolls.</summary>
-    static void FreeReroll(CCitadelPlayerPawn pawn)
+    void FreeReroll(NativeSeat ns, CCitadelPlayerPawn pawn)
     {
         pawn.SetCurrency(ECurrencyType.EItemDraftRerolls, pawn.GetCurrency(ECurrencyType.EItemDraftRerolls) + 1);
-        Native.Reroll(pawn);
+        RerollNow(ns, pawn);
     }
 
     /// <summary>Everyone else who has the just-drafted ability on screen gets new cards, free of charge.</summary>
@@ -379,7 +408,7 @@ public sealed partial class DraftPlugin
             if (!other.Bot && Players.FromSlot(other.Slot) is { } c)
                 Chat.PrintToChat(c, other.Ru ? $"[Draft] «{taken.Ru}» только что забрали — карточки заменены бесплатно." : $"[Draft] {taken.En} was just taken - your cards were replaced for free.");
             Log($"native slot {other.Slot}: {taken.Name} was taken by slot {picker.Slot}, free reroll");
-            FreeReroll(pawn);
+            FreeReroll(other, pawn);
         }
     }
 
@@ -418,7 +447,7 @@ public sealed partial class DraftPlugin
         int card = Array.FindIndex(ns.Offer, a => a != null && args.Args.Contains(TwinPrefix + a.Name, StringComparer.OrdinalIgnoreCase));
         if (card < 0) return true;
         Log($"native slot {ns.Slot} clicked card {card + 1} ({ns.Offer[card]!.Name})");
-        if (c.GetHeroPawn() is { } pawn) PickNative(ns, pawn, card, clicked: true);
+        if (c.GetHeroPawn() is { } pawn) PickNative(ns, pawn, card);
         return true;
     }
 
@@ -428,7 +457,7 @@ public sealed partial class DraftPlugin
         if (on) _clickers.Add(c.PlayerSteamId); else _clickers.Remove(c.PlayerSteamId);
         if (!_native.TryGetValue(c.Slot, out var ns) || ns.Click == on) return;
         ns.Click = on;
-        if (ns.Round < Slots && ns.Offer[0] != null && c.GetHeroPawn() is { } pawn) FreeReroll(pawn);
+        if (ns.Round < Slots && ns.Offer[0] != null && c.GetHeroPawn() is { } pawn) FreeReroll(ns, pawn);
     }
 
     [Command("click", Description = "Clickable draft cards (needs the client addon): /click, /click off")]

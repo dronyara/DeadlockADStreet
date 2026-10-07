@@ -37,14 +37,22 @@ public sealed partial class DraftPlugin
     void ApplyAllKits()
     {
         foreach (var (slot, kit) in _kits)
-            if (Players.FromSlot(slot)?.GetHeroPawn() is { } pawn) ApplyKit(pawn, kit);
+        {
+            if (Players.FromSlot(slot)?.GetHeroPawn() is not { } pawn) continue;
+            ApplyKit(pawn, kit);
+            if (_rules != Rules.StreetBrawl) continue;
+            // Street Brawl hands out its unlocks before a kit made ahead of the match (/chaos, the text draft) is on
+            // the hero, so such a kit starts unlocked, as a kit drafted on the brawl screen does.
+            for (int i = 0; i < Slots; i++)
+                if (pawn.GetAbilityBySlot((EAbilitySlot)i) is CCitadelBaseAbility a && (a.UpgradeBits & 1) == 0) a.UpgradeBits |= 1;
+        }
     }
 
-    [Command("newdraft", Description = "Host: end the current match and reload the map into a fresh lobby")]
+    [Command("newdraft", Description = "Lobby leader: end the current match and reload the map into a fresh lobby")]
     public void CmdNewDraft(CCitadelPlayerController? caller = null)
     {
-        if (caller != null && caller.Slot != Host()) throw new CommandException("Only the host can restart.");
-        Log("host asked for a new lobby");
+        if (caller != null && caller.Slot != Host()) throw new CommandException("Only the lobby leader can restart.");
+        Log("lobby leader asked for a new lobby");
         _phase = Phase.Lobby;
         Server.ChangeLevel(Server.MapName);
     }

@@ -70,7 +70,8 @@ Standard after the draft is a map reload, because Street Brawl removes the side 
 
 ## 5. New heroes
 The ability pool is generated from the game's files and compiled into the plugin, so a new hero does not appear on
-its own. Heroes marked disabled or in development are left out.
+its own. Heroes marked disabled or in development are left out, except those named in `UNRELEASED` at the top of
+`tools/gen_pool.py`: their abilities are wanted in the draft, the heroes themselves stay unpickable.
 
 1. Decompile `scripts/heroes.vdata_c` and `scripts/abilities.vdata_c` from `game/citadel/pak01_dir.vpk` with
    [Source 2 Viewer](https://valveresourceformat.github.io/) and save them as `data/heroes.vdata` and
@@ -85,3 +86,33 @@ python tools\find_sigs.py
 python tools\package.py v0.1.1
 ```
 The zip lands in `dist/`. Its signature file matches the game build it was made on.
+
+## 7. Upgrades or ability-targeted items stop working — the hero's ability table
+The plugin writes the drafted kit into the server's table of the hero's own abilities
+(`CitadelHeroData_t.m_mapBoundAbilities`), so the engine handles upgrades and ability-targeted items by itself.
+The field is found through the schema; the layout inside it is hard-coded at the top of `AbilityDraft/HeroBinding.cs`
+(build 6759): the map's node array at `+0x10`, the node count at `+0x1c`; a node is `0x28` bytes with the slot in
+the low 16 bits of `+0x10`, a pointer to the ability's name at `+0x18` and the name's token at `+0x20`.
+
+A node is only written when it reads back as "a name and that name's token". When the layout has moved the server
+log says `hero table: no trusted entry for …`, nothing is written, and the plugin falls back to answering the
+upgrade and item commands itself (`Training.cs`, `Imbue.cs`; the item part then needs the client addon).
+
+To look at the memory, write `herodata Inferno 160` into `%TEMP%\abilitydraft.cmd` and follow the pointer at `+0x10`
+with `peek <address> 640`: ability names show up next to their slots.
+
+## 8. The client addon
+`clientside/pak01_dir.vpk` carries a copy of the game's ability data and goes stale with every patch that touches
+items or abilities. Rebuild it (`tools/build_cards.py`, see the README), copy the result over
+`clientside/pak01_dir.vpk` and update the build number in `clientside/README.md`.
+
+- The resource compiler comes from CSDK 12 and is older than the game; it is run with
+  `-danger_mode_ignore_schema_mismatches`, as the CSDK's own launcher does.
+- The Deadworks UI bridge is downloaded from Deadworks and checked against its published checksum. When Deadworks
+  changes its bootstrap, delete `data/deadworks-bootstrap.vpk` and build again.
+- `addon/panorama/scripts/abilitydraft_hud.js` relies on names from the game's own UI: the panels `hud_signature`,
+  `CitadelAbilityIcon`, `CitadelHudAbilityUpgradePips`, `AbilityUnlock1-3`, `OptionsContainer`, and the style classes
+  `isUnlocked`, `canAffordUpgrade`, `hasAbilityUpgrade`, `selected`, `dismiss`. If the TAB view or the pick animation
+  stops working after a patch, decompile `panorama/layout/citadel_hud_ability_upgrade_pips.vxml_c`,
+  `panorama/styles/citadel_hud_ability_upgrade_pips.vcss_c` and `panorama/styles/citadel_item_draft_panel.vcss_c`
+  and compare.
