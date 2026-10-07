@@ -124,8 +124,6 @@ Deadworks stops starting until its next release, and the plugin's own signatures
   keeps resetting them and the addon keeps putting them back.
 - **The header still says "item draft".** That text is in the client's localization.
 - **Standard gives 50 seconds for all four picks**, because the draft borrows Street Brawl's first buy phase.
-- **Baba's abilities are in the pool although the hero is not released**, so they may be unfinished. Put them on the
-  blacklist if they misbehave.
 - Tested by one player with bots on build 6759 with Deadworks v0.5.4. A lobby of several people, a match played to
   its end (the reset and the kick), the player cap and the hero lock have not been tried with real players.
 
