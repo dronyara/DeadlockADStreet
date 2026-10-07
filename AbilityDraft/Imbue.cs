@@ -23,14 +23,17 @@ public sealed partial class DraftPlugin
         if (c.GetHeroPawn() is not { } pawn || pawn.GetAbilityBySlot((EAbilitySlot)slot) is not CCitadelBaseAbility target) return false;
         // Moving or re-buying an item the hero already owns stays with the engine.
         if (pawn.AbilityComponent.FindAbilityByName(item) != null) return false;
-        if (!ItemInfo.CanBeImbued(item) || !target.CanBeImbued || !target.CanBeImbuedBy(item))
+        // Whether the item fits the ability is the engine's call, made when the item is attached (a misfit is refunded
+        // there). The plugin's own pre-checks turned down pairs the shop had offered, so they are only logged now.
+        bool isImbue = ItemInfo.CanBeImbued(item);
+        if (!isImbue)
         {
-            Log($"imbue refused for slot {c.Slot}: {item} does not fit {target.AbilityName}");
+            Log($"imbue refused for slot {c.Slot}: {item} is not an ability-targeted item");
             return true;
         }
         if (_imbues.TryGetValue(c.Slot, out var busy) && Now < busy.Deadline) return true;
         _imbues[c.Slot] = new PendingImbue(item, (EAbilitySlot)slot, Now + ImbueSeconds);
-        Log($"imbue requested by slot {c.Slot}: {item} -> {target.AbilityName} (ability {slot + 1})");
+        Log($"imbue requested by slot {c.Slot}: {item} -> {target.AbilityName} (ability {slot + 1}); target.CanBeImbued={target.CanBeImbued} target.CanBeImbuedBy={target.CanBeImbuedBy(item)}");
         Server.ClientCommand(c.Slot, $"buyitem {item}");
         return true;
     }

@@ -157,5 +157,9 @@ public static partial class AbilityPool
         new("hero_unicorn", "Celeste", "Селеста", 2, "ability_unicorn_prismaticguard", "Dazzling Trick", "Ослепительный трюк", false, "file://{images}/hud/abilities/unicorn/unicorn_shield.psd"),
         new("hero_unicorn", "Celeste", "Селеста", 3, "ability_unicorn_luminousstrike", "Radiant Daggers", "Лучезарные кинжалы", false, "file://{images}/hud/abilities/unicorn/unicorn_luminousflux.psd"),
         new("hero_unicorn", "Celeste", "Селеста", 4, "ability_unicorn_dazzlingorb", "Shining Wonder", "Сияющее чудо", true, "file://{images}/hud/abilities/unicorn/unicorn_orb.psd"),
+        new("hero_ratking", "Rat King", "Крысиный король", 1, "ability_ratking_scrap_grenade", "Scrap Grenade", "Хлам-граната", false, "file://{images}/hud/abilities/ratking/ratking_grenade.psd"),
+        new("hero_ratking", "Rat King", "Крысиный король", 2, "ability_ratking_ratnibble", "Rat Swarm", "Крысиная стая", false, "file://{images}/hud/abilities/ratking/ratking_swarm.psd"),
+        new("hero_ratking", "Rat King", "Крысиный король", 3, "ability_ratking_ratarmor", "Royal Pestments", "Крысолевская мантия", false, "file://{images}/hud/abilities/ratking/ratking_shield.psd"),
+        new("hero_ratking", "Rat King", "Крысиный король", 4, "ability_ratking_standard_bearer", "Rule, Ratannia!", "Правь, Крысания!", true, "file://{images}/hud/abilities/ratking/ratking_flag.psd"),
     ];
 }
