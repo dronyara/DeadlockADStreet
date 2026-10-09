@@ -53,12 +53,16 @@ public sealed partial class DraftPlugin
             if (c.IsBot || !UI.HasClientBootstrap(c.Slot)) continue;
             bool train = _phase == Phase.Match && _kits.ContainsKey(c.Slot);
             bool loaded = _trainHud.TryGetValue(c.Slot, out bool told);
-            if (!loaded && !train && !_native.ContainsKey(c.Slot)) continue;
+            // In a draft the script is loaded once the first cards are out, not when the match starts.
+            bool drafting = _native.TryGetValue(c.Slot, out var seat) && seat.SavedRerolls >= 0;
+            if (!loaded && !train && !drafting) continue;
             if (!_trainHudWired)
             {
                 _trainHudWired = true;
-                // The client rebuilt its panels: load again and tell it everything anew.
-                UI.ClientResync += slot => { _trainHud.Remove(slot); _trainSkills.Remove(slot); };
+                // The client lost its panels and asked for them again. Deadworks reloads the layout and replays the
+                // fields by itself, so the player stays on the list of those who have the script - taking them off
+                // it made the plugin treat them as addon-less for the two seconds the reload took.
+                UI.ClientResync += slot => _trainSkills.Remove(slot);
             }
             if (!loaded) UI.Panel(TrainPanelId).LoadXml(c.Recipients, TrainLayout);
             if (!loaded || told != train)

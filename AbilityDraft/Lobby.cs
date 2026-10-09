@@ -45,7 +45,13 @@ public sealed partial class DraftPlugin
     public override HookResult OnClientConCommand(ClientConCommandEvent args)
     {
         if (TraceClientCommands) Log($"clientcmd slot={args.Controller?.Slot} {args.Command} [{string.Join(" ", args.Args)}]");
-        if (NativeBuyClick(args) || NativeRerollClick(args) || TrainCommand(args) || ImbueCommand(args)) return HookResult.Stop;
+        if (NativeBuyClick(args) || PickAck(args) || TrainCommand(args) || ImbueCommand(args)) return HookResult.Stop;
+        if (args.Command == "ad_dbg")
+        {
+            // The addon script reporting what it sees on the client's screen.
+            Log($"addon slot {args.Controller?.Slot}: {string.Join(" ", args.Args.Skip(1))}");
+            return HookResult.Stop;
+        }
         if (_phase == Phase.Lobby && args.Command == "selecthero" && args.Args.Length > 1 && args.Controller is { } picking && HeroTaken(args.Args[^1], picking.Slot))
         {
             Chat.PrintToChat(picking, L("[Draft] Этот герой уже занят — выбери другого.", "[Draft] That hero is already taken - pick another one."));

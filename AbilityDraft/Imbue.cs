@@ -45,8 +45,8 @@ public sealed partial class DraftPlugin
         if (_imbues.TryGetValue(c.Slot, out var busy) && Now < busy.Deadline) return true;
         if (!_trainHud.ContainsKey(c.Slot))
         {
-            bool ru = !_seats.TryGetValue(c.Slot, out var seat) || seat.Ru;
-            Chat.PrintToChat(c, ru ? "[Draft] Предметы «на способность» работают только с аддоном AbilityDraft." : "[Draft] Ability-targeted items need the AbilityDraft addon.");
+            bool ru = _seats.TryGetValue(c.Slot, out var seat) ? seat.Ru : _ru;
+            Chat.PrintToChat(c, ru ? "[Draft] Предметы «на способность» работают только с аддоном Ability Brawl." : "[Draft] Ability-targeted items need the Ability Brawl addon.");
             Log($"imbue refused for slot {c.Slot}: no addon on the client");
             return true;
         }

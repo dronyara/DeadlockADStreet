@@ -1,4 +1,4 @@
-# Ability Draft for Deadlock
+# Ability Brawl for Deadlock
 
 **English** · [Русский](README.ru.md)
 
@@ -20,7 +20,7 @@ addon ([`clientside/`](clientside)) adds mouse picks on the draft screen and a w
 4. The match starts and the **stock Street Brawl draft screen opens with ability cards**. Four picks, the last one
    is the ultimate, with three rerolls per pick on the stock Reroll button.
    **Take a card by typing its number in chat: Enter → `1`, `2` or `3` → Enter (left, top, right).** The message is
-   not shown to anyone. With the client addon and `/click` a card can simply be clicked.
+   not shown to anyone. With the client addon and `/vpk` a card can simply be clicked.
 5. Street Brawl: after the fourth ability the same screen goes on to the usual items, and the match continues as
    Street Brawl.
    Standard: once everyone has four abilities (or after 50 seconds — the rest is filled in at random) the map reloads
@@ -96,7 +96,7 @@ map start and on `/draft`:
 [`clientside/pak01_dir.vpk`](clientside) is ready to install; [`clientside/README.md`](clientside/README.md) says
 how. Players with and without it play in the same lobby. It adds:
 
-- **Clickable draft cards with the ability's tooltip.** Type `/click` in chat before the draft. Every ability gets a
+- **Clickable draft cards with the ability's tooltip.** Type `/vpk` in chat before the draft. Every ability gets a
   twin item (`ad_<ability>`) the stock screen can safely "buy"; the plugin answers the purchase with the ability.
   The taken card grows and the other two fade, as in a normal Street Brawl draft.
 - **The TAB upgrade view.** A click on an ability trains it, and the upgrade pips show the drafted kit's real state.
@@ -122,9 +122,13 @@ Deadworks stops starting until its next release, and the plugin's own signatures
 - **Without the addon, the TAB upgrade view is drawn for the hero's original abilities**: a click there does nothing
   and the pips stay empty. ALT + ability key works. With the addon the pips flicker now and then, because the game
   keeps resetting them and the addon keeps putting them back.
+- **The pick animation needs the addon's script to hear from the server in time.** Those messages travel as
+  closed captions; when the client stutters at the start of a match (seen with the server, the game and a
+  recorder on one 8 GB machine) they get lost for about a quarter of a minute, and a pick made then goes
+  through without the animation.
 - **The header still says "item draft".** That text is in the client's localization.
 - **Standard gives 50 seconds for all four picks**, because the draft borrows Street Brawl's first buy phase.
-- Tested by one player with bots on build 6759 with Deadworks v0.5.4. A lobby of several people, a match played to
+- Tested by one player with bots on build 6766 with Deadworks v0.5.4. A lobby of several people, a match played to
   its end (the reset and the kick), the player cap and the hero lock have not been tried with real players.
 
 ## What is inside

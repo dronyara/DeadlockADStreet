@@ -204,7 +204,7 @@ public sealed partial class DraftPlugin
                     Peek((IntPtr)peekAt, a.Length > 1 && int.TryParse(a[1], out int peekLen) ? peekLen : 96);
                 break;
             case "click":
-                // click <slot> 0|1 - twin cards for a seat, as /click does
+                // click <slot> 0|1 - twin cards for a seat, as /vpk does
                 if (a.Length > 0 && int.TryParse(a[0], out var clickSlot) && Players.FromSlot(clickSlot) is { } clicker)
                 {
                     SetClick(clicker, a.Length < 2 || a[1] != "0");

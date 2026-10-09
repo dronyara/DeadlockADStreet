@@ -14,7 +14,7 @@
 	'use strict';
 	var COST = [1, 2, 5];
 	var slots = [], boundHud = null, enabled = false, alive = false, warned = false;
-	var skills = '', lastBuy = '', pickSeq = 0, dealtSeq = 0, marked = [];
+	var skills = '', lastBuy = '', pickSeq = 0, dealtSeq = 0, marked = [], handover = false, handoverUntil = 0;
 
 	function root() { var p = $.GetContextPanel(); while (p.GetParent()) p = p.GetParent(); return p; }
 
@@ -82,14 +82,17 @@
 	function tick() {
 		if (!alive) return;
 		if (enabled) { if (bind()) paint(); } else if (slots.length) unbind();
+		if (handover) handOver();
 		$.Schedule(0, tick);
 	}
 
 	function unmark() {
 		marked.forEach(function (m) { if (m.panel.IsValid()) m.panel.RemoveClass(m.cls); });
 		marked = [];
+		handover = false;
 	}
 
+	// The pick, part one: the taken card grows, the other two fade.
 	function showPick(card) {
 		var container = root().FindChildTraverse('OptionsContainer');
 		if (!container) return;
@@ -99,17 +102,52 @@
 			option.AddClass(cls);
 			marked.push({ panel: option, cls: cls });
 		});
+		// Tell the server the pick is on screen: it holds the next deal until then.
+		$.DispatchEvent('CitadelConCommand', 'ad_ack ' + pickSeq);
 		// Never leave a card faded out if the server's "dealt" gets lost.
 		var mine = pickSeq;
-		$.Schedule(1.5, function () { if (pickSeq === mine) unmark(); });
+		$.Schedule(4.0, function () { if (pickSeq === mine && !handover) unmark(); });
 	}
+
+	// Part two, once the next cards are out. The screen itself keeps the old cards up through the wheel spin, swaps
+	// their content and only then plays each card's reveal: it puts the class "reveal" on the card for the length
+	// of that animation (a card at rest has none of the state classes). So all three stay faded here until the
+	// screen starts a card's reveal; from then on that card is the screen's again.
+	function startHandover() {
+		marked.forEach(function (m) {
+			if (!m.panel.IsValid() || m.cls === 'dismiss') return;
+			m.panel.RemoveClass(m.cls);
+			m.panel.AddClass('dismiss');
+			m.cls = 'dismiss';
+		});
+		handover = true;
+		handoverUntil = Date.now() + 4000;
+	}
+
+	function handOver() {
+		var late = Date.now() > handoverUntil;
+		marked = marked.filter(function (m) {
+			if (!m.panel.IsValid()) return false;
+			if (!late && !m.panel.BHasClass('reveal') && !m.panel.BHasClass('anticipation')) return true;
+			m.panel.RemoveClass(m.cls);
+			return false;
+		});
+		if (late) report('handover timed out');
+		if (marked.length === 0) handover = false;
+	}
+
+	function report(text) { $.DispatchEvent('CitadelConCommand', 'ad_dbg ' + text.replace(/[^A-Za-z0-9+\/ _-]/g, '')); }
 
 	function read(p) {
 		enabled = p.get('train', '0') === '1';
 		skills = p.get('skills', '');
-		var dealt = parseInt(p.get('dealt', '0'), 10) || 0;
+		var dealtParts = p.get('dealt', '0').split('|'), dealt = parseInt(dealtParts[0], 10) || 0;
 		var pick = p.get('pick', '').split('|'), seq = parseInt(pick[0], 10) || 0;
-		if (dealt > dealtSeq) { dealtSeq = dealt; if (dealt >= pickSeq) unmark(); }
+		if (dealt > dealtSeq) {
+			dealtSeq = dealt;
+			// "|1": the server waited for this pick to show, so the cards stay away until the new ones come in.
+			if (dealt >= pickSeq && marked.length) { if (dealtParts[1] === '1') startHandover(); else unmark(); }
+		}
 		// A pick whose deal is already out arrived too late to be shown.
 		if (seq > pickSeq) { pickSeq = seq; if (seq > dealtSeq) showPick(parseInt(pick[1], 10) || 0); }
 		var buy = p.get('buy', '');

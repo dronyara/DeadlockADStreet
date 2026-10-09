@@ -26,7 +26,7 @@ public sealed partial class DraftPlugin
     // Clickable cards need the optional client addon (tools/build_cards.py): it gives every ability a twin, a real
     // item named ad_<ability> with the ability's icon and name. A click on a twin is safe and makes the client send
     // an ordinary "buyitem ad_<ability>", which the plugin answers with the ability. The server cannot see who has
-    // the addon, and a client without it would not know the twins, so each player switches them on with /click.
+    // the addon, and a client without it would not know the twins, so each player switches them on with /vpk.
     const string TwinPrefix = "ad_";
     readonly HashSet<ulong> _clickers = new();
 
@@ -44,6 +44,9 @@ public sealed partial class DraftPlugin
         public int SavedRerolls = -1, SavedRoundsLeft, SavedRoundsTotal;
         public bool Prev1, Prev2, Prev3;
         public float NextBotAt;
+        public int PickSeq;                                 // the pick the client was told about and is showing
+        public float PickDealAt;                            // > 0: when the deal after that pick goes out
+        public bool PickShown;
     }
 
     readonly Dictionary<int, NativeSeat> _native = new();
@@ -79,6 +82,7 @@ public sealed partial class DraftPlugin
         if (_native.Count == 0) return;
         foreach (var ns in _native.Values)
         {
+            if (ns.PickDealAt > 0 && Now >= ns.PickDealAt) DealShownPick(ns);
             if (ns.Round >= Slots || Players.FromSlot(ns.Slot)?.GetHeroPawn() is not { } pawn) continue;
             var state = DraftState.GetAddress(pawn.Handle);
             var data = Marshal.ReadIntPtr(state, StateOptionData);
@@ -221,15 +225,15 @@ public sealed partial class DraftPlugin
                     {
                         c.HudAnnounce(ns.Ru ? "ВЫБОР СПОСОБНОСТЕЙ" : "ABILITY DRAFT", ns.Ru ? "Кликни по карточке или напиши в чат 1, 2 или 3" : "Click a card or type 1, 2 or 3 in chat");
                         Chat.PrintToChat(c, ns.Ru
-                            ? "[Draft] Выбор способностей: кликни по карточке или напиши в чат 1, 2 или 3. Карточки пустые? Нет аддона — напиши /click."
-                            : "[Draft] Ability draft: click a card or type 1, 2 or 3 in chat. Blank cards? The addon is missing - type /click.");
+                            ? "[Draft] Выбор способностей: кликни по карточке или напиши в чат 1, 2 или 3. Карточки пустые? Нет аддона — напиши /vpk."
+                            : "[Draft] Ability draft: click a card or type 1, 2 or 3 in chat. Blank cards? The addon is missing - type /vpk.");
                     }
                     else
                     {
                         c.HudAnnounce(ns.Ru ? "ВЫБОР СПОСОБНОСТЕЙ" : "ABILITY DRAFT", ns.Ru ? "Напиши в чат 1, 2 или 3 — клик по карточке не работает" : "Type 1, 2 or 3 in chat - clicking a card does nothing");
                         Chat.PrintToChat(c, ns.Ru
-                            ? "[Draft] Выбор способностей: напиши в чат 1, 2 или 3 (слева, сверху, справа). «Прокрутить» меняет все три. Клик работает только с аддоном (/click)."
-                            : "[Draft] Ability draft: type 1, 2 or 3 in chat (left, top, right). The Reroll button deals new cards. Clicking needs the addon (/click).");
+                            ? "[Draft] Выбор способностей: напиши в чат 1, 2 или 3 (слева, сверху, справа). «Прокрутить» меняет все три. Клик работает только с аддоном (/vpk)."
+                            : "[Draft] Ability draft: type 1, 2 or 3 in chat (left, top, right). The Reroll button deals new cards. Clicking needs the addon (/vpk).");
                     }
                 }
             }
@@ -319,19 +323,41 @@ public sealed partial class DraftPlugin
         if (ns.Bot || !_trainHud.ContainsKey(ns.Slot) || Players.FromSlot(ns.Slot) is not { } picker) { DealAfterPick(ns, pawn); return; }
         // The stock screen has a look for a taken card (it grows) and for the ones passed over (they fade), but only
         // shows it for a real purchase. A client with the addon is told which card was taken and puts those looks on
-        // itself; the next deal waits for that to play.
-        int seq = ++_pickSeq, seat = ns.Slot;
-        UI.Panel(TrainPanelId).Set(picker.Recipients, "pick", $"{seq}|{i}");
-        Timer.Once(PickShowSeconds.Seconds(), () =>
-        {
-            if (!_native.TryGetValue(seat, out var still) || still != ns || Players.FromSlot(seat) is not { } who || who.GetHeroPawn() is not { } p) return;
-            DealAfterPick(ns, p);
-            UI.Panel(TrainPanelId).Set(who.Recipients, "dealt", seq.ToString());
-        });
+        // itself and says so; the next deal goes out a moment after that. The message to the client takes anything
+        // from a few frames to most of a second, so a fixed delay either cut the animation off or missed it.
+        ns.PickSeq = ++_pickSeq;
+        ns.PickShown = false;
+        ns.PickDealAt = Now + PickAckSeconds;
+        UI.Panel(TrainPanelId).Set(picker.Recipients, "pick", $"{ns.PickSeq}|{i}");
     }
 
-    const double PickShowSeconds = 0.6;
+    const float PickAckSeconds = 1.5f;      // how long the client has to say it is showing the pick
+    const float PickShowSeconds = 0.55f;    // how long the pick stays on screen before the next cards
     int _pickSeq;
+
+    /// <summary>The addon script reports that it has put the pick on screen.</summary>
+    bool PickAck(ClientConCommandEvent args)
+    {
+        if (args.Command != "ad_ack" || args.Controller is not { } c) return false;
+        if (_native.TryGetValue(c.Slot, out var ns) && ns.PickDealAt > 0 && !ns.PickShown
+            && args.Args.Length > 1 && int.TryParse(args.Args[^1], out int seq) && seq == ns.PickSeq)
+        {
+            ns.PickShown = true;
+            ns.PickDealAt = Now + PickShowSeconds;
+        }
+        return true;
+    }
+
+    void DealShownPick(NativeSeat ns)
+    {
+        ns.PickDealAt = 0;
+        if (Players.FromSlot(ns.Slot) is not { } who || who.GetHeroPawn() is not { } pawn) return;
+        if (!ns.PickShown) Log($"native slot {ns.Slot}: the client did not show pick {ns.PickSeq} in time");
+        DealAfterPick(ns, pawn);
+        // "1": the pick is on screen, keep the cards away until the new ones come in. "0": it never showed - put
+        // nothing in the way of the new cards.
+        UI.Panel(TrainPanelId).Set(who.Recipients, "dealt", $"{ns.PickSeq}|{(ns.PickShown ? 1 : 0)}");
+    }
 
     /// <summary>The deal that follows a pick: a reroll on the house.</summary>
     void DealAfterPick(NativeSeat ns, CCitadelPlayerPawn pawn)
@@ -359,16 +385,6 @@ public sealed partial class DraftPlugin
             DealNative(ns, pawn, state, data);
             return;
         }
-    }
-
-    /// <summary>The Reroll button. Taken over so that the new cards are abilities from the first update on.</summary>
-    bool NativeRerollClick(ClientConCommandEvent args)
-    {
-        if (args.Command != "itemdraftreroll" || args.Controller is not { } c) return false;
-        if (!_native.TryGetValue(c.Slot, out var ns) || ns.Bot || c.GetHeroPawn() is not { } pawn) return false;
-        if (ns.Round >= Slots || ns.Offer[0] == null) return false;
-        RerollNow(ns, pawn);                // the engine function checks and spends the reroll itself
-        return true;
     }
 
     readonly HashSet<string> _taken = new();        // abilities somebody has drafted in the current draft
@@ -460,14 +476,14 @@ public sealed partial class DraftPlugin
         if (ns.Round < Slots && ns.Offer[0] != null && c.GetHeroPawn() is { } pawn) FreeReroll(ns, pawn);
     }
 
-    [Command("click", Description = "Clickable draft cards (needs the client addon): /click, /click off")]
+    [Command("vpk", "click", Description = "Clickable draft cards (needs the client addon): /vpk, /vpk off")]
     public void CmdClick(CCitadelPlayerController caller, string mode = "")
     {
         bool on = mode.Length == 0 ? !_clickers.Contains(caller.PlayerSteamId) : mode is not ("off" or "0");
         SetClick(caller, on);
-        bool ru = !_seats.TryGetValue(caller.Slot, out var s) || s.Ru;
+        bool ru = _seats.TryGetValue(caller.Slot, out var s) ? s.Ru : _ru;
         Chat.PrintToChat(caller, on
-            ? ru ? "[Draft] Клик по карточкам включён. Нужен аддон AbilityDraft; если карточки пустые — напиши /click ещё раз." : "[Draft] Clickable cards are on. They need the AbilityDraft addon; if the cards are blank, type /click again."
+            ? ru ? "[Draft] Клик по карточкам включён. Нужен аддон Ability Brawl; если карточки пустые — напиши /vpk ещё раз." : "[Draft] Clickable cards are on. They need the Ability Brawl addon; if the cards are blank, type /vpk again."
             : ru ? "[Draft] Клик по карточкам выключен, выбирай цифрой в чате." : "[Draft] Clickable cards are off, pick with a digit in chat.");
     }
 

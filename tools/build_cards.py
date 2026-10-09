@@ -4,7 +4,7 @@
 
 A click on a draft card makes the client build item data for it, which crashes for an ability. So every ability
 in the pool gets a twin: a real item named ad_<ability> with the ability's icon and name. The plugin deals twins
-to players who switched clicking on (/click), and answers the client's "buyitem ad_<ability>" with the ability.
+to players who switched clicking on (/vpk), and answers the client's "buyitem ad_<ability>" with the ability.
 
 Needs data/abilities.vdata (tools/dump-vdata.ps1). Writes, under <out dir>:
   content/scripts/abilities.vdata                      - the game's ability data plus the twins
