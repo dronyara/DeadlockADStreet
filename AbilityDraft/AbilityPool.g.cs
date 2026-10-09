@@ -161,12 +161,12 @@ public static partial class AbilityPool
         new("hero_ratking", "Rat King", "Крысиный король", 2, "ability_ratking_ratnibble", "Rat Swarm", "Крысиная стая", false, "file://{images}/hud/abilities/ratking/ratking_swarm.psd"),
         new("hero_ratking", "Rat King", "Крысиный король", 3, "ability_ratking_ratarmor", "Royal Pestments", "Крысолевская мантия", false, "file://{images}/hud/abilities/ratking/ratking_shield.psd"),
         new("hero_ratking", "Rat King", "Крысиный король", 4, "ability_ratking_standard_bearer", "Rule, Ratannia!", "Правь, Крысания!", true, "file://{images}/hud/abilities/ratking/ratking_flag.psd"),
-        new("hero_baba", "Baba", "Буся", 1, "ability_baba_bubbling_brew", "Threadsap", "Threadsap", false, "file://{images}/hud/abilities/baba/threadsap.psd"),
-        new("hero_baba", "Baba", "Буся", 2, "ability_baba_bench_run", "Granny Long Legs", "Granny Long Legs", false, "file://{images}/hud/abilities/baba/strafing_run.psd"),
-        new("hero_baba", "Baba", "Буся", 3, "ability_baba_hexing_brew", "Baba's Brew", "Baba's Brew", false, "file://{images}/hud/abilities/baba/teapot_brew.psd"),
-        new("hero_baba", "Baba", "Буся", 4, "ability_baba_ultimate_2", "Feed The Birds", "Feed The Birds", true, "file://{images}/hud/abilities/baba/pigeon_launcher.psd"),
+        new("hero_baba", "Baba", "Буся", 1, "ability_baba_bubbling_brew", "Threadsap", "Истощающая нить", false, "file://{images}/hud/abilities/baba/threadsap.psd"),
+        new("hero_baba", "Baba", "Буся", 2, "ability_baba_bench_run", "Granny Long Legs", "Длинноногая бабуся", false, "file://{images}/hud/abilities/baba/strafing_run.psd"),
+        new("hero_baba", "Baba", "Буся", 3, "ability_baba_hexing_brew", "Baba's Brew", "Бусин отвар", false, "file://{images}/hud/abilities/baba/teapot_brew.psd"),
+        new("hero_baba", "Baba", "Буся", 4, "ability_baba_ultimate_2", "Feed The Birds", "Птичий корм", true, "file://{images}/hud/abilities/baba/pigeon_launcher.psd"),
     ];
 
     // Heroes that cannot be picked yet; only their abilities are in the pool.
-    public static readonly string[] Unreleased = ["hero_baba"];
+    public static readonly string[] Unreleased = [];
 }

@@ -39,16 +39,18 @@ def cs(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-UNRELEASED = {"hero_baba"}
+# Still marked "in development" in the game data, yet on the hero select screen and playable.
+PLAYABLE_ANYWAY = {"hero_baba"}
+# Not pickable: only their abilities go into the pool.
+UNRELEASED = set()
 ab = blocks(abil)
 rows = []
 skipped = []
 for hero, b in blocks(heroes).items():
     if not hero.startswith("hero_") or hero in ("hero_base", "hero_targetdummy", "hero_genericperson"):
         continue
-    # Heroes still in development are left out - except the ones named here, whose abilities are wanted in the
-    # draft anyway. They are not playable heroes, only a source of abilities.
-    if field(b, "m_bDisabled") == "true" or field(b, "m_bInDevelopment") == "true" and hero not in UNRELEASED:
+    # Heroes still marked "in development" are left out, except the ones named in the two lists above.
+    if field(b, "m_bDisabled") == "true" or field(b, "m_bInDevelopment") == "true" and hero not in PLAYABLE_ANYWAY | UNRELEASED:
         continue
     sig = [m.group(1) if (m := re.search(r'ESlot_Signature_%d = "([^"]+)"' % i, b)) else None for i in range(1, 5)]
     if None in sig:

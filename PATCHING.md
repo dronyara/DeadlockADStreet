@@ -70,8 +70,10 @@ Standard after the draft is a map reload, because Street Brawl removes the side 
 
 ## 5. New heroes
 The ability pool is generated from the game's files and compiled into the plugin, so a new hero does not appear on
-its own. Heroes marked disabled or in development are left out, except those named in `UNRELEASED` at the top of
-`tools/gen_pool.py`: their abilities are wanted in the draft, the heroes themselves stay unpickable.
+its own. Heroes marked disabled or in development are left out, except those named near the top of
+`tools/gen_pool.py`: `PLAYABLE_ANYWAY` for heroes the game still marks "in development" although they can be picked
+(Baba on build 6766), and `UNRELEASED` for heroes whose abilities are wanted in the draft while the hero stays
+unpickable.
 
 1. Decompile `scripts/heroes.vdata_c` and `scripts/abilities.vdata_c` from `game/citadel/pak01_dir.vpk` with
    [Source 2 Viewer](https://valveresourceformat.github.io/) and save them as `data/heroes.vdata` and

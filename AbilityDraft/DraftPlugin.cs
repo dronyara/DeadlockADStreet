@@ -4,14 +4,14 @@ using DeadworksManaged.Api.UI;
 namespace AbilityDraft;
 
 /// <summary>
-/// Ability Draft for Deadlock (server side, Deadworks plugin).
+/// Ability Brawl for Deadlock (server side, Deadworks plugin).
 /// Players join and pick heroes as usual; the lobby leader types /draft; everyone drafts four abilities, one slot at a
 /// time, from three random offers (each offer can be rerolled, Street Brawl style); then the lobby votes for the
 /// rules (Standard or Street Brawl) and the match starts with the drafted kits.
 /// </summary>
 public sealed partial class DraftPlugin : DeadworksPluginBase
 {
-    public override string Name => "Ability Draft";
+    public override string Name => "Ability Brawl";
 
     // ---- rules -----------------------------------------------------------------------------------------------
     const int Slots = 4;                 // Signature1..4; the last one is the ultimate
@@ -67,7 +67,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     // ---- lifecycle ------------------------------------------------------------------------------------------
     public override void OnLoad(bool isReload)
     {
-        Log($"=== Ability Draft loaded (reload={isReload}) pool={AbilityPool.All.Length} abilities ===");
+        Log($"=== Ability Brawl loaded (reload={isReload}) pool={AbilityPool.All.Length} abilities ===");
         Log(Native.Load(Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? ".", "managed", "plugins", "AbilityDraft.signatures.json")));
         Server.AddEngineLogListener(OnEngineLog);
         if (isReload) BeginMap();
@@ -105,6 +105,8 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         Server.ExecuteCommand($"citadel_allow_duplicate_heroes {(_config.UniqueHeroes ? 0 : 1)}");
         _matchOverAt = -1f;
         _chaosHeroes.Clear();
+        _trainHud.Clear();          // a new map: every client's script is loaded afresh
+        _trainSkills.Clear();
         if (_phase == Phase.Restoring && _restore.Count > 0)
         {
             // The reload into Standard after a draft on the Street Brawl screen: hold the lobby until everyone is back.
