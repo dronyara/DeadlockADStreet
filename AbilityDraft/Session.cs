@@ -36,12 +36,32 @@ public sealed partial class DraftPlugin
     /// <summary>A finished match starts the countdown to a fresh lobby.</summary>
     void MatchOver(EGameState state)
     {
-        if (_phase != Phase.Match || _matchOverAt >= 0 || _config.SecondsAfterMatch <= 0) return;
+        if (_phase != Phase.Match || _matchOverAt >= 0) return;
         if (state is not (EGameState.PostGame or EGameState.PostGamePlayOfTheGame or EGameState.End or EGameState.Abandoned)) return;
+        // The mode convars are replicated, and a client keeps the last value it was sent after it leaves: out of a
+        // Street Brawl match it would find its own hideout running as Street Brawl. The match is decided, so the
+        // server goes back to Standard right away, while everyone is still there - most people leave from the end
+        // screen without waiting for the kick.
+        if (!_modeReset)
+        {
+            _modeReset = true;
+            ResetModeConVars();
+            Log($"match over ({state}): mode convars back to Standard");
+        }
+        if (_config.SecondsAfterMatch <= 0) return;
         _matchOverAt = Now + _config.SecondsAfterMatch;
         Log($"MATCH OVER ({state}): new lobby in {_config.SecondsAfterMatch} s");
         Chat.PrintToChatAll(L($"[Draft] Матч окончен. Через {_config.SecondsAfterMatch} с лобби откроется заново, останется только лидер лобби.",
             $"[Draft] The match is over. In {_config.SecondsAfterMatch} s the lobby reopens and only the lobby leader stays."));
+    }
+
+    bool _modeReset;
+
+    void ResetModeConVars()
+    {
+        Server.ExecuteCommand($"{BrawlCvar} 0");
+        Server.ExecuteCommand($"{ActiveLaneCvar} 0");
+        Server.ExecuteCommand("citadel_allow_duplicate_heroes 0");
     }
 
     void TickMatchOver()

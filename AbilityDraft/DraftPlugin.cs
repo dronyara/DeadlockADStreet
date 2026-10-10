@@ -17,12 +17,11 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
     const int Slots = 4;                 // Signature1..4; the last one is the ultimate
     const int Offers = 3;
     const int RerollsPerOffer = 2;
-    const float DraftSeconds = 120f;
     const float VoteSeconds = 25f;
     const float StartDelaySeconds = 5f;
     const float BotThinkSeconds = 1.5f;
 
-    enum Phase { Lobby, Drafting, Voting, Starting, Match, Restoring }
+    enum Phase { Lobby, Drafting, Voting, Starting, Match, Restoring, Pregame }
     enum Rules { None, Standard, StreetBrawl }
 
     sealed class Seat
@@ -104,9 +103,13 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         LoadConfig();
         Server.ExecuteCommand($"citadel_allow_duplicate_heroes {(_config.UniqueHeroes ? 0 : 1)}");
         _matchOverAt = -1f;
+        _modeReset = false;
         _chaosHeroes.Clear();
         _trainHud.Clear();          // a new map: every client's script is loaded afresh
         _trainSkills.Clear();
+        _wallsUp = false;           // a new map has its spawn walls down again
+        _buyLength = 0;
+        _loggedBrawlState = 0;
         if (_phase == Phase.Restoring && _restore.Count > 0)
         {
             // The reload into Standard after a draft on the Street Brawl screen: hold the lobby until everyone is back.
@@ -183,12 +186,15 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
         SyncTrainHud();
         TickImbues();
         TickChaosHeroes();
+        TickSpawnWalls();
+        TickBrawlLog();
         switch (_phase)
         {
             case Phase.Drafting: TickDraft(); break;
             case Phase.Voting: TickVote(); break;
             case Phase.Starting: if (Now >= _phaseEnd) StartMatch(); break;
             case Phase.Restoring: TickRestore(); break;
+            case Phase.Pregame: if (Now >= _phaseEnd) StartRestoredMatch(); break;
             case Phase.Match: TickEmptyMatch(); TickMatchOver(); break;
         }
     }
@@ -199,7 +205,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
 
     void TickEmptyMatch()
     {
-        if (Players.GetAll().Any(p => !p.IsBot)) { _emptySince = -1f; return; }
+        if (_testKeepEmpty || Players.GetAll().Any(p => !p.IsBot)) { _emptySince = -1f; return; }
         if (_emptySince < 0) { _emptySince = Now; return; }
         if (Now - _emptySince < EmptyMatchSeconds) return;
         _emptySince = -1f;
@@ -249,7 +255,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
             DealRound(s);
         }
         _phase = Phase.Drafting;
-        _phaseEnd = Now + DraftSeconds;
+        _phaseEnd = DraftDeadline();
         _nextTimerText = 0;
         Announce("ABILITY DRAFT", L("Выбери 4 способности", "Pick 4 abilities"));
         foreach (var s in _seats.Values) ShowOffer(s);
@@ -351,7 +357,7 @@ public sealed partial class DraftPlugin : DeadworksPluginBase
                 }
             }
         }
-        if (Now >= _nextTimerText)
+        if (Now >= _nextTimerText && _phaseEnd < float.MaxValue)
         {
             _nextTimerText = Now + 1f;
             int left = Math.Max(0, (int)MathF.Ceiling(_phaseEnd - Now));

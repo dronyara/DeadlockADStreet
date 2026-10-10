@@ -58,20 +58,20 @@ public sealed partial class DraftPlugin
 
     // Standard rules have no draft screen of their own, so the draft borrows Street Brawl's first buy phase:
     // the match starts as Street Brawl, everyone drafts, then the mode is switched back and the match restarts.
-    const float BorrowedDraftSeconds = 50f;      // must end before the buy phase does and the brawl round begins
+    // The buy phase is held open for as long as somebody is still drafting (HoldBuyPhase), under either rules.
     bool _nativeThenStandard;
-    float _nativeDeadline;
+    float _nativeDeadline;      // only with DraftTimeLimit set: whoever is still drafting then gets random picks
 
     void ArmNativeDraft(bool thenStandard)
     {
         _nativeThenStandard = thenStandard;
-        _nativeDeadline = Now + BorrowedDraftSeconds + StartDelaySeconds;
+        _nativeDeadline = DraftDeadline();
         _native.Clear();
         _taken.Clear();
         foreach (var s in _seats.Values)
             _native[s.Slot] = new NativeSeat
             {
-                Slot = s.Slot, Bot = s.Bot, Ru = s.Ru,
+                Slot = s.Slot, Bot = s.Bot && !_testNoBot.Contains(s.Slot), Ru = s.Ru,
                 Click = !s.Bot && Players.FromSlot(s.Slot) is { } c && _clickers.Contains(c.PlayerSteamId),
             };
         Log($"NATIVE DRAFT armed for slots {string.Join(",", _native.Keys)} (rounds offsets {RoundsLeftOffset}/{RoundsTotalOffset})");
@@ -97,8 +97,20 @@ public sealed partial class DraftPlugin
             if (dealt) DealNative(ns, pawn, state, data);
             else if (ns.Bot && Now >= ns.NextBotAt) PickNative(ns, pawn, Random.Shared.Next(Offers));
         }
-        if (_nativeThenStandard && (Now >= _nativeDeadline || _native.Values.All(ns => ns.Round >= Slots || Players.FromSlot(ns.Slot) == null)))
-            SwitchToStandard();
+        bool drafting = _native.Values.Any(ns => ns.Round < Slots && Players.FromSlot(ns.Slot) != null);
+        if (drafting && Now >= _nativeDeadline)
+        {
+            // Out of time: the rest of their picks are made for them, at the pace a bot picks.
+            _nativeDeadline = float.MaxValue;
+            foreach (var ns in _native.Values.Where(ns => ns.Round < Slots && !ns.Bot))
+            {
+                Log($"native slot {ns.Slot} ran out of time at round {ns.Round + 1}: random picks from here");
+                ns.Bot = true;
+                ns.PickDealAt = 0;
+            }
+        }
+        if (drafting) HoldBuyPhase();
+        else if (_nativeThenStandard) SwitchToStandard();
     }
 
     /// <summary>Ends a hero's stock draft the way the engine does after the last pick, so the client closes its screen.</summary>
@@ -111,7 +123,7 @@ public sealed partial class DraftPlugin
 
     void SwitchToStandard()
     {
-        // Whoever ran out of time gets random abilities for the slots still open.
+        // Whoever is gone gets random abilities for the slots still open.
         foreach (var ns in _native.Values.Where(ns => ns.Round < Slots))
         {
             if (Players.FromSlot(ns.Slot)?.GetHeroPawn() is not { } pawn) continue;
@@ -125,7 +137,7 @@ public sealed partial class DraftPlugin
                 ns.Kit[ns.Round] = pick.Name;
             }
             _kits[ns.Slot] = ns.Kit.Select(k => k!).ToArray();
-            Log($"native slot {ns.Slot} timed out, kit completed at random: [{string.Join(", ", ns.Kit)}]");
+            Log($"native slot {ns.Slot} left unfinished, kit completed at random: [{string.Join(", ", ns.Kit)}]");
         }
         // Street Brawl strips the side lanes of their Walkers and Barracks for good, so a true Standard match needs
         // a fresh map. Everyone keeps their seat: team, hero and drafted kit are put back once the map is up again.
@@ -200,9 +212,21 @@ public sealed partial class DraftPlugin
             return;
         }
 
-        Log($"RESTORE done (all back={allBack}), starting Standard match");
+        Log($"RESTORE done (all back={allBack}), pregame for {_config.PregameSeconds} s");
         _restore.Clear();
+        if (_config.PregameSeconds <= 0) { StartRestoredMatch(); return; }
+        // The stock pregame: everybody stands behind the spawn walls until the countdown is over.
+        _phase = Phase.Pregame;
+        _phaseEnd = Now + _config.PregameSeconds;
+        GameRules.SetGameStateEndTime(_phaseEnd);
+        Announce("STANDARD", L($"Матч начнётся через {_config.PregameSeconds} с", $"Match starts in {_config.PregameSeconds} s"));
+    }
+
+    void StartRestoredMatch()
+    {
+        Log("PREGAME over, starting Standard match");
         _phase = Phase.Match;
+        SetSpawnWalls(false);
         GameRules.ChangeGameState(EGameState.GameInProgress);
         GameRules.SetGameStartTime(Now);
         Announce("STANDARD", L("Матч начался", "The match has started"));
