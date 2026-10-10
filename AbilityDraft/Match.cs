@@ -27,7 +27,9 @@ public sealed partial class DraftPlugin
             Server.ExecuteCommand($"{BrawlCvar} 1");
             Server.ExecuteCommand("citadel_street_brawl_reset");
             if (nativeDraft) ArmNativeDraft(thenStandard: _rules != Rules.StreetBrawl);
+            _wallsUp = false;       // from here the brawl runs the spawn walls: up for a buy phase, down for a round
         }
+        else SetSpawnWalls(false);
         GameRules.ChangeGameState(EGameState.GameInProgress);
         GameRules.SetGameStartTime(Now);
         // A mode reset may rebuild heroes; OnPawnHeroInitialized re-applies kits then, this covers the case it does not.

@@ -23,8 +23,11 @@ addon ([`clientside/`](clientside)) adds mouse picks on the draft screen and a w
    not shown to anyone. With the client addon and `/vpk` a card can simply be clicked.
 5. Street Brawl: after the fourth ability the same screen goes on to the usual items, and the match continues as
    Street Brawl.
-   Standard: once everyone has four abilities (or after 50 seconds — the rest is filled in at random) the map reloads
-   into a normal match, and the plugin puts every player back on their team and hero with their drafted kit.
+   Standard: once everyone has four abilities the map reloads into a normal match, and the plugin puts every player
+   back on their team and hero with their drafted kit. Everyone waits behind the spawn walls until all are back,
+   then for a 10-second countdown.
+   The draft has no clock: the timer on the screen stands still until the last player has taken their fourth
+   ability. Under Street Brawl rules it then runs for the usual minute, which is the time for the items.
 6. When the match ends, the lobby reopens after 20 seconds: everyone but the lobby leader is kicked and the map
    reloads. `/newdraft` (leader) does the reload at any time, without kicking.
 
@@ -78,7 +81,9 @@ map start and on `/draft`:
   "MaxPlayersStandard": 12,
   "MaxPlayersStreetBrawl": 8,
   "UniqueHeroes": true,
-  "SecondsAfterMatch": 20
+  "SecondsAfterMatch": 20,
+  "DraftTimeLimit": 0,
+  "PregameSeconds": 10
 }
 ```
 - `Blacklist` — abilities that are never offered. Use the internal name or the English or Russian name; all of them
@@ -90,6 +95,9 @@ map start and on `/draft`:
 - `UniqueHeroes` — `true`: a hero somebody already has cannot be picked.
 - `SecondsAfterMatch` — after a match ends, seconds until everyone but the lobby leader is kicked and the lobby
   reopens. `0` switches this off.
+- `DraftTimeLimit` — seconds the ability draft waits for a player; after that the rest of their picks are made at
+  random. `0` (the default) is no limit: the draft waits until everyone has picked.
+- `PregameSeconds` — Standard rules: seconds everyone waits behind the spawn walls before the match starts.
 
 ## Optional client addon
 [`clientside/pak01_dir.vpk`](clientside) is ready to install; [`clientside/README.md`](clientside/README.md) says
@@ -126,9 +134,15 @@ Deadworks stops starting until its next release, and the plugin's own signatures
   recorder on one 8 GB machine) they get lost for about a quarter of a minute, and a pick made then goes
   through without the animation.
 - **The header still says "item draft".** That text is in the client's localization.
-- **Standard gives 50 seconds for all four picks**, because the draft borrows Street Brawl's first buy phase.
-- Tested by one player with bots on build 6766 with Deadworks v0.5.4. A lobby of several people, a match played to
-  its end (the reset and the kick), the player cap and the hero lock have not been tried with real players.
+- **A player who leaves a Street Brawl match halfway finds their own hideout in Street Brawl mode.** The game keeps
+  the server's mode setting after the disconnect. Restarting the game clears it; so does typing
+  `citadel_gamemode_streetbrawl_enabled 0` and `citadel_active_lane 0` in the console and reloading the hideout.
+  Players who stay to the end are not affected: the plugin sets the mode back the moment the match is decided.
+- **With no draft time limit one idle player holds everyone up.** Set `DraftTimeLimit`, or the lobby leader types
+  `/newdraft`.
+- v1.0 was played by a lobby of six. v1.1 (build 6774, Deadworks v0.5.4) was played by one player with bots: the
+  spawn walls and the draft without a clock were seen in game; the mode reset at the end of a match was checked
+  on the server only.
 
 ## What is inside
 - `AbilityDraft/` — the plugin (C#): `DraftPlugin.cs` (phases, vote, the text-menu draft), `NativeDraft.cs` (the

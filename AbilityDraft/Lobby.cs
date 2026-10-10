@@ -57,7 +57,7 @@ public sealed partial class DraftPlugin
             Chat.PrintToChat(picking, L("[Draft] Этот герой уже занят — выбери другого.", "[Draft] That hero is already taken - pick another one."));
             return HookResult.Stop;
         }
-        return _phase is Phase.Drafting or Phase.Voting or Phase.Starting or Phase.Restoring && args.Command is "selecthero" or "changeteam" or "jointeam"
+        return _phase is Phase.Drafting or Phase.Voting or Phase.Starting or Phase.Restoring or Phase.Pregame && args.Command is "selecthero" or "changeteam" or "jointeam"
             ? HookResult.Stop
             : HookResult.Continue;
     }

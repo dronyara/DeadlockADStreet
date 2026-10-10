@@ -21,6 +21,10 @@ public sealed partial class DraftPlugin
         public bool UniqueHeroes { get; set; } = true;
         /// <summary>After a match ends: seconds until everyone but the lobby leader is kicked and the lobby reopens. 0 = never.</summary>
         public int SecondsAfterMatch { get; set; } = 20;
+        /// <summary>Seconds the draft waits for a player before making the rest of their picks at random. 0 = no limit.</summary>
+        public int DraftTimeLimit { get; set; } = 0;
+        /// <summary>Standard rules: seconds everyone waits behind the spawn walls before the match starts. 0 = none.</summary>
+        public int PregameSeconds { get; set; } = 10;
     }
 
     ConfigFile _config = new();
@@ -58,7 +62,7 @@ public sealed partial class DraftPlugin
             string text = File.ReadAllText(ConfigPath);
             var config = JsonSerializer.Deserialize<ConfigFile>(text, ConfigJson) ?? new ConfigFile();
             // A config written by an older version: add the settings it does not have yet, keep the ones it has.
-            if (!text.Contains(nameof(ConfigFile.SecondsAfterMatch), StringComparison.OrdinalIgnoreCase)) WriteConfig(config);
+            if (!text.Contains(nameof(ConfigFile.PregameSeconds), StringComparison.OrdinalIgnoreCase)) WriteConfig(config);
             _config = config;
             _ru = config.Language.Trim().StartsWith("ru", StringComparison.OrdinalIgnoreCase);
             var unknown = new List<string>();
@@ -91,6 +95,9 @@ public sealed partial class DraftPlugin
             "// UniqueHeroes: true - a hero somebody already has cannot be picked.\n" +
             "// SecondsAfterMatch: after a match ends, seconds until everyone but the lobby leader is kicked and the\n" +
             "//   lobby reopens. 0 switches this off.\n" +
+            "// DraftTimeLimit: seconds the ability draft waits for a player; after that the rest of their picks are\n" +
+            "//   made at random. 0 - no limit, the draft waits until everyone has picked.\n" +
+            "// PregameSeconds: Standard rules - seconds everyone waits behind the spawn walls before the match starts.\n" +
             JsonSerializer.Serialize(config, ConfigJson) + "\n", new UTF8Encoding(false));
 
     /// <summary>A plain list of every ability name the blacklist accepts, kept next to the config for the host.</summary>

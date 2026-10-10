@@ -65,6 +65,16 @@ The plugin relies on these server convars and commands:
 - `citadel_gamemode_streetbrawl_enabled` — the mode follows it live;
 - `citadel_street_brawl_reset` — starts a Street Brawl match on the running map (it does so whatever the convar says);
 - `citadel_active_lane` — Street Brawl sets it to one lane and never resets it; the plugin puts it back to `0`.
+- `CStreetBrawlController` inside the game rules (`CCitadelGameRules.m_tStreetBrawl`, found through the schema):
+  `m_eStreetBrawlState` (`2` is the buy phase on build 6774) and `m_flNextStateTime`. While somebody is still
+  drafting, the plugin pushes that time back every tick, which is what stops the timer. If the draft is cut off by
+  the round again, check the state number with `brawl` in `%TEMP%bilitydraft.cmd` and fix `BrawlBuyPhase` in
+  `AbilityDraft/Brawl.cs`.
+- The spawn walls are the map's brushes `amber_spawn_block_brush` and `sapphire_spawn_block_brush`; the plugin
+  switches them with the `Enable` / `Disable` inputs. `walls` in the bridge file lists them (`effects=0x20` is "off").
+  If the lobby has no walls after a map update, the brushes were renamed: `named func_brush` lists all names.
+- The mode convars are replicated to clients and stay with them after they leave, so the plugin sets them back as
+  soon as a match ends.
 
 Standard after the draft is a map reload, because Street Brawl removes the side lanes' Walkers and Barracks for good.
 

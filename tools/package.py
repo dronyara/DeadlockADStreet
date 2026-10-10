@@ -63,6 +63,7 @@ PLAY
   No two players get the same ability.
 - Street Brawl: after the fourth ability the same screen goes on to the usual items; the kit starts unlocked.
   Standard: the map reloads once everyone is done, and every player gets their team, hero and kit back.
+  The draft has no clock: the timer stands still until the last player has taken their fourth ability.
 - Upgrades (ALT + ability key) and items that attach to one ability work as in a normal match.
 - When the match ends, the lobby reopens after 20 seconds and everyone but the lobby leader is kicked.
   /newdraft (lobby leader) returns everyone to the lobby at any time.
@@ -77,6 +78,8 @@ start. The file explains itself; in short:
   "MaxPlayersStreetBrawl": 8       with more players than this, a vote for Street Brawl plays Standard
   "UniqueHeroes": true             no two players on the same hero
   "SecondsAfterMatch": 20          delay before the lobby reopens after a match; 0 switches it off
+  "DraftTimeLimit": 0              seconds the draft waits for a player before picking for them; 0 - no limit
+  "PregameSeconds": 10             Standard: countdown behind the spawn walls before the match starts
 
 CLIENT ADDON (optional, for each player who wants it)
 clientside/pak01_dir.vpk in the repository, with install notes next to it. It must match the game build and is
